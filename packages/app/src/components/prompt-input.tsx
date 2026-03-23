@@ -56,6 +56,7 @@ import { PromptImageAttachments } from "./prompt-input/image-attachments"
 import { PromptDragOverlay } from "./prompt-input/drag-overlay"
 import { promptPlaceholder } from "./prompt-input/placeholder"
 import { ImagePreview } from "@opencode-ai/ui/image-preview"
+import { showToast } from "@opencode-ai/ui/toast"
 
 interface PromptInputProps {
   class?: string
@@ -99,6 +100,44 @@ const EXAMPLES = [
 ] as const
 
 const NON_EMPTY_TEXT = /[^\s\u200B]/
+const CHATWEB_KEY = "prompt-chatweb.v1"
+const chatwebRead = () => {
+  if (typeof window === "undefined") {
+    return {
+      enabled: false,
+      ai: "chatgpt" as "chatgpt" | "claude",
+      browser: "chrome" as "chrome" | "edge",
+    }
+  }
+  const raw = window.localStorage.getItem(CHATWEB_KEY)
+  if (!raw) {
+    return {
+      enabled: false,
+      ai: "chatgpt" as "chatgpt" | "claude",
+      browser: "chrome" as "chrome" | "edge",
+    }
+  }
+  try {
+    const data = JSON.parse(raw)
+    if (data.ai !== "chatgpt" && data.ai !== "claude") throw new Error("invalid ai")
+    if (data.browser !== "chrome" && data.browser !== "edge") throw new Error("invalid browser")
+    return {
+      enabled: Boolean(data.enabled),
+      ai: data.ai,
+      browser: data.browser,
+    }
+  } catch {
+    return {
+      enabled: false,
+      ai: "chatgpt" as "chatgpt" | "claude",
+      browser: "chrome" as "chrome" | "edge",
+    }
+  }
+}
+const chatwebWrite = (input: { enabled: boolean; ai: "chatgpt" | "claude"; browser: "chrome" | "edge" }) => {
+  if (typeof window === "undefined") return
+  window.localStorage.setItem(CHATWEB_KEY, JSON.stringify(input))
+}
 
 export const PromptInput: Component<PromptInputProps> = (props) => {
   const sdk = useSDK()
@@ -282,8 +321,136 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     mode: "normal",
     applyingHistory: false,
   })
+  const seed = chatwebRead()
+  const [chatweb, setChatweb] = createStore<{
+    enabled: boolean
+    ai: "chatgpt" | "claude"
+    browser: "chrome" | "edge"
+    logged: boolean
+    opening: boolean
+    loading: boolean
+  }>({
+    enabled: seed.enabled,
+    ai: seed.ai,
+    browser: seed.browser,
+    logged: false,
+    opening: false,
+    loading: false,
+  })
+
+  const syncChatweb = async () => {
+    setChatweb("loading", true)
+    const req = await fetch(`${sdk.url}/chatweb/status`, {
+      headers: {
+        "x-opencode-directory": sdk.directory,
+      },
+    }).catch(() => undefined)
+    const body = req ? await req.json().catch(() => undefined) : undefined
+    const key = `${chatweb.ai}-${chatweb.browser}`
+    const stat = body?.status?.[key]
+    setChatweb("logged", Boolean(stat?.hasStorage))
+    setChatweb("loading", false)
+  }
+
+  const saveChatweb = (next: Partial<{ enabled: boolean; ai: "chatgpt" | "claude"; browser: "chrome" | "edge" }>) => {
+    const value = {
+      enabled: next.enabled ?? chatweb.enabled,
+      ai: next.ai ?? chatweb.ai,
+      browser: next.browser ?? chatweb.browser,
+    }
+    chatwebWrite(value)
+    if (next.enabled !== undefined) setChatweb("enabled", next.enabled)
+    if (next.ai) setChatweb("ai", next.ai)
+    if (next.browser) setChatweb("browser", next.browser)
+  }
+
+  const openChatweb = async () => {
+    setChatweb("loading", true)
+    const req = await fetch(`${sdk.url}/chatweb/login`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-opencode-directory": sdk.directory,
+      },
+      body: JSON.stringify({
+        ai: chatweb.ai,
+        browser: chatweb.browser,
+      }),
+    }).catch(() => undefined)
+    if (!req?.ok) {
+      setChatweb("loading", false)
+      showToast({
+        variant: "error",
+        title: "ChatWeb",
+        description: "No se pudo abrir el login",
+      })
+      return
+    }
+    setChatweb("opening", true)
+    setChatweb("loading", false)
+    showToast({
+      title: "ChatWeb",
+      description: "Login abierto. Inicia sesión y luego confirma.",
+    })
+  }
+
+  const confirmChatweb = async () => {
+    setChatweb("loading", true)
+    const req = await fetch(`${sdk.url}/chatweb/login`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        "x-opencode-directory": sdk.directory,
+      },
+      body: JSON.stringify({
+        ai: chatweb.ai,
+        browser: chatweb.browser,
+      }),
+    }).catch(() => undefined)
+    if (!req?.ok) {
+      setChatweb("loading", false)
+      showToast({
+        variant: "error",
+        title: "ChatWeb",
+        description: "No se pudo guardar el login",
+      })
+      return
+    }
+    setChatweb("opening", false)
+    await syncChatweb()
+    showToast({
+      title: "ChatWeb",
+      description: "Sesión guardada correctamente.",
+    })
+  }
 
   const buttonsSpring = useSpring(() => (store.mode === "normal" ? 1 : 0), { visualDuration: 0.2, bounce: 0 })
+  createEffect(
+    on(
+      () => [chatweb.ai, chatweb.browser] as const,
+      () => {
+        chatwebWrite({
+          enabled: chatweb.enabled,
+          ai: chatweb.ai,
+          browser: chatweb.browser,
+        })
+        void syncChatweb()
+      },
+      { defer: true },
+    ),
+  )
+  createEffect(
+    on(
+      () => chatweb.enabled,
+      () =>
+        chatwebWrite({
+          enabled: chatweb.enabled,
+          ai: chatweb.ai,
+          browser: chatweb.browser,
+        }),
+      { defer: true },
+    ),
+  )
   const motion = (value: number) => ({
     opacity: value,
     transform: `scale(${0.95 + value * 0.05})`,
@@ -1589,6 +1756,62 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     <Icon name="shield" size="small" classList={{ "text-icon-success-base": accepting() }} />
                   </Button>
                 </TooltipKeybind>
+                <div class="h-6 w-px bg-border-subtle mx-1" />
+                <Button
+                  type="button"
+                  variant={chatweb.enabled ? "secondary" : "ghost"}
+                  size="normal"
+                  classList={{
+                    "h-7 px-2 text-12-medium": true,
+                    "bg-surface-success-base/20 text-text-success": chatweb.enabled,
+                  }}
+                  style={control()}
+                  onClick={() => saveChatweb({ enabled: !chatweb.enabled })}
+                >
+                  ChatWeb
+                </Button>
+                <Show when={chatweb.enabled}>
+                  <Select
+                    size="normal"
+                    options={["chatgpt", "claude"]}
+                    current={chatweb.ai}
+                    onSelect={(x) => saveChatweb({ ai: x as "chatgpt" | "claude" })}
+                    class="capitalize max-w-[120px] text-text-base"
+                    valueClass="truncate text-12-regular text-text-base"
+                    triggerStyle={control()}
+                    variant="ghost"
+                  />
+                  <Select
+                    size="normal"
+                    options={["chrome", "edge"]}
+                    current={chatweb.browser}
+                    onSelect={(x) => saveChatweb({ browser: x as "chrome" | "edge" })}
+                    class="capitalize max-w-[110px] text-text-base"
+                    valueClass="truncate text-12-regular text-text-base"
+                    triggerStyle={control()}
+                    variant="ghost"
+                  />
+                  <Button
+                    type="button"
+                    size="normal"
+                    variant="ghost"
+                    classList={{
+                      "h-7 px-2 text-12-medium": true,
+                      "bg-surface-success-base/20 text-text-success": chatweb.logged,
+                    }}
+                    style={control()}
+                    disabled={chatweb.loading}
+                    onClick={() => (chatweb.opening ? void confirmChatweb() : void openChatweb())}
+                  >
+                    {chatweb.opening
+                      ? "Confirmar login"
+                      : chatweb.logged
+                        ? "Logueado"
+                        : chatweb.loading
+                          ? "Verificando..."
+                          : "Login"}
+                  </Button>
+                </Show>
               </div>
             </div>
           </div>

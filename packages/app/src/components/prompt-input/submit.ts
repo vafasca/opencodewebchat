@@ -25,6 +25,7 @@ type PendingPrompt = {
 }
 
 const pending = new Map<string, PendingPrompt>()
+const CHATWEB_KEY = "prompt-chatweb.v1"
 
 export type FollowupDraft = {
   sessionID: string
@@ -38,6 +39,8 @@ export type FollowupDraft = {
 
 type FollowupSendInput = {
   client: ReturnType<typeof useSDK>["client"]
+  url: string
+  directory: string
   globalSync: ReturnType<typeof useGlobalSync>
   sync: ReturnType<typeof useSync>
   draft: FollowupDraft
@@ -49,6 +52,42 @@ type FollowupSendInput = {
 const draftText = (prompt: Prompt) => prompt.map((part) => ("content" in part ? part.content : "")).join("")
 
 const draftImages = (prompt: Prompt) => prompt.filter((part): part is ImageAttachmentPart => part.type === "image")
+
+const chatweb = () => {
+  if (typeof window === "undefined") return
+  const raw = window.localStorage.getItem(CHATWEB_KEY)
+  if (!raw) return
+  try {
+    const data = JSON.parse(raw)
+    if (data.ai !== "chatgpt" && data.ai !== "claude") return
+    if (data.browser !== "chrome" && data.browser !== "edge") return
+    return {
+      enabled: Boolean(data.enabled),
+      ai: data.ai as "chatgpt" | "claude",
+      browser: data.browser as "chrome" | "edge",
+    }
+  } catch {
+    return
+  }
+}
+
+const mode = async (input: FollowupSendInput) => {
+  const cfg = chatweb()
+  if (!cfg) return
+  await fetch(`${input.url}/chatweb/mode`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-opencode-directory": input.directory,
+    },
+    body: JSON.stringify({
+      sessionID: input.draft.sessionID,
+      enabled: cfg.enabled,
+      ai: cfg.ai,
+      browser: cfg.browser,
+    }),
+  }).catch(() => undefined)
+}
 
 export async function sendFollowupDraft(input: FollowupSendInput) {
   const text = draftText(input.draft.prompt)
@@ -80,6 +119,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
         setIdle()
         return false
       }
+      await mode(input)
 
       await input.client.session.command({
         sessionID: input.draft.sessionID,
@@ -148,6 +188,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       remove()
       return false
     }
+    await mode(input)
 
     await input.client.session.promptAsync({
       sessionID: input.draft.sessionID,
@@ -551,6 +592,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     void sendFollowupDraft({
       client,
+      url: sdk.url,
+      directory: sdk.directory,
       sync,
       globalSync,
       draft,
