@@ -342,18 +342,25 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     setChatweb("loading", true)
     const ctrl = new AbortController()
     const timer = window.setTimeout(() => ctrl.abort(), 12000)
-    const req = await fetch(`${sdk.url}/chatweb/status`, {
-      headers: {
-        "x-opencode-directory": sdk.directory,
-      },
-      signal: ctrl.signal,
-    }).catch(() => undefined)
-    clearTimeout(timer)
-    const body = req ? await req.json().catch(() => undefined) : undefined
-    const key = `${chatweb.ai}-${chatweb.browser}`
-    const stat = body?.status?.[key]
-    setChatweb("logged", Boolean(stat?.hasStorage))
-    setChatweb("loading", false)
+    try {
+      const req = await fetch(`${sdk.url}/chatweb/status`, {
+        headers: {
+          "x-opencode-directory": sdk.directory,
+        },
+        signal: ctrl.signal,
+      }).catch((err) => {
+        console.error("[ChatWeb] status request failed", err)
+        return undefined
+      })
+      const body = req ? await req.json().catch(() => undefined) : undefined
+      const key = `${chatweb.ai}-${chatweb.browser}`
+      const stat = body?.status?.[key]
+      setChatweb("logged", Boolean(stat?.hasStorage))
+      console.info("[ChatWeb] status", { key, stat, ok: req?.ok })
+    } finally {
+      clearTimeout(timer)
+      setChatweb("loading", false)
+    }
   }
 
   const saveChatweb = (next: Partial<{ enabled: boolean; ai: "chatgpt" | "claude"; browser: "chrome" | "edge" }>) => {
@@ -372,71 +379,85 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     setChatweb("loading", true)
     const ctrl = new AbortController()
     const timer = window.setTimeout(() => ctrl.abort(), 45000)
-    const req = await fetch(`${sdk.url}/chatweb/login`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-opencode-directory": sdk.directory,
-      },
-      body: JSON.stringify({
-        ai: chatweb.ai,
-        browser: chatweb.browser,
-      }),
-      signal: ctrl.signal,
-    }).catch(() => undefined)
-    clearTimeout(timer)
-    if (!req?.ok) {
-      const body = req ? await req.json().catch(() => undefined) : undefined
-      setChatweb("loading", false)
-      setChatweb("opening", false)
-      showToast({
-        variant: "error",
-        title: "ChatWeb",
-        description: body?.error ?? "No se pudo abrir el login",
+    try {
+      console.info("[ChatWeb] login start", { ai: chatweb.ai, browser: chatweb.browser, url: sdk.url })
+      const req = await fetch(`${sdk.url}/chatweb/login`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-opencode-directory": sdk.directory,
+        },
+        body: JSON.stringify({
+          ai: chatweb.ai,
+          browser: chatweb.browser,
+        }),
+        signal: ctrl.signal,
+      }).catch((err) => {
+        console.error("[ChatWeb] login request failed", err)
+        return undefined
       })
-      return
+      if (!req?.ok) {
+        const body = req ? await req.json().catch(() => undefined) : undefined
+        setChatweb("opening", false)
+        showToast({
+          variant: "error",
+          title: "ChatWeb",
+          description: body?.error ?? "No se pudo abrir el login",
+        })
+        return
+      }
+      const body = await req.json().catch(() => undefined)
+      console.info("[ChatWeb] login opened", body)
+      setChatweb("opening", true)
+      showToast({
+        title: "ChatWeb",
+        description: "Login abierto. Inicia sesión y luego confirma.",
+      })
+    } finally {
+      clearTimeout(timer)
+      setChatweb("loading", false)
     }
-    setChatweb("opening", true)
-    setChatweb("loading", false)
-    showToast({
-      title: "ChatWeb",
-      description: "Login abierto. Inicia sesión y luego confirma.",
-    })
   }
 
   const confirmChatweb = async () => {
     setChatweb("loading", true)
     const ctrl = new AbortController()
     const timer = window.setTimeout(() => ctrl.abort(), 20000)
-    const req = await fetch(`${sdk.url}/chatweb/login`, {
-      method: "PUT",
-      headers: {
-        "content-type": "application/json",
-        "x-opencode-directory": sdk.directory,
-      },
-      body: JSON.stringify({
-        ai: chatweb.ai,
-        browser: chatweb.browser,
-      }),
-      signal: ctrl.signal,
-    }).catch(() => undefined)
-    clearTimeout(timer)
-    if (!req?.ok) {
-      const body = req ? await req.json().catch(() => undefined) : undefined
-      setChatweb("loading", false)
-      showToast({
-        variant: "error",
-        title: "ChatWeb",
-        description: body?.error ?? "No se pudo guardar el login",
+    try {
+      const req = await fetch(`${sdk.url}/chatweb/login`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          "x-opencode-directory": sdk.directory,
+        },
+        body: JSON.stringify({
+          ai: chatweb.ai,
+          browser: chatweb.browser,
+        }),
+        signal: ctrl.signal,
+      }).catch((err) => {
+        console.error("[ChatWeb] login confirm request failed", err)
+        return undefined
       })
-      return
+      if (!req?.ok) {
+        const body = req ? await req.json().catch(() => undefined) : undefined
+        showToast({
+          variant: "error",
+          title: "ChatWeb",
+          description: body?.error ?? "No se pudo guardar el login",
+        })
+        return
+      }
+      setChatweb("opening", false)
+      await syncChatweb()
+      showToast({
+        title: "ChatWeb",
+        description: "Sesión guardada correctamente.",
+      })
+    } finally {
+      clearTimeout(timer)
+      setChatweb("loading", false)
     }
-    setChatweb("opening", false)
-    await syncChatweb()
-    showToast({
-      title: "ChatWeb",
-      description: "Sesión guardada correctamente.",
-    })
   }
 
   const buttonsSpring = useSpring(() => (store.mode === "normal" ? 1 : 0), { visualDuration: 0.2, bounce: 0 })

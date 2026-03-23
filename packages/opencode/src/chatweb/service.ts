@@ -70,17 +70,64 @@ export namespace ChatWeb {
 
   async function launch(kind: BrowserKind) {
     const args = ["--start-maximized", "--disable-blink-features=AutomationControlled"]
+    const roots =
+      kind === "chrome"
+        ? [
+            process.env["PROGRAMFILES"] ? path.join(process.env["PROGRAMFILES"], "Google/Chrome/Application/chrome.exe") : "",
+            process.env["PROGRAMFILES(X86)"]
+              ? path.join(process.env["PROGRAMFILES(X86)"], "Google/Chrome/Application/chrome.exe")
+              : "",
+            process.env["LOCALAPPDATA"]
+              ? path.join(process.env["LOCALAPPDATA"], "Google/Chrome/Application/chrome.exe")
+              : "",
+          ]
+        : [
+            process.env["PROGRAMFILES"]
+              ? path.join(process.env["PROGRAMFILES"], "Microsoft/Edge/Application/msedge.exe")
+              : "",
+            process.env["PROGRAMFILES(X86)"]
+              ? path.join(process.env["PROGRAMFILES(X86)"], "Microsoft/Edge/Application/msedge.exe")
+              : "",
+            process.env["LOCALAPPDATA"]
+              ? path.join(process.env["LOCALAPPDATA"], "Microsoft/Edge/Application/msedge.exe")
+              : "",
+          ]
+    const bin = (
+      await Promise.all(
+        roots
+          .filter((item) => item)
+          .map(async (item) => ({
+            item,
+            ok: await fs
+              .stat(item)
+              .then(() => true)
+              .catch(() => false),
+          })),
+      )
+    ).find((item) => item.ok)?.item
+    if (bin) {
+      log.info("launch with executablePath", { kind, bin })
+      return chromium.launch({
+        executablePath: bin,
+        headless: false,
+        args,
+        timeout: 20000,
+      })
+    }
+
     const browser = await chromium
       .launch({
         channel: channel(kind),
         headless: false,
         args,
+        timeout: 20000,
       })
       .catch(async (err) => {
         log.warn("failed channel launch, fallback to default chromium", { kind, error: String(err) })
         return chromium.launch({
           headless: false,
           args,
+          timeout: 20000,
         })
       })
     return browser
