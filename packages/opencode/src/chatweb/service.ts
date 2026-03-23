@@ -94,22 +94,39 @@ export namespace ChatWeb {
   }
 
   export async function startLogin(input: { ai: Ai; kind: BrowserKind }) {
+    log.info("start login", { ai: input.ai, browser: input.kind })
     await close(login.get(key(input)))
     login.delete(key(input))
 
-    const browser = await launch(input.kind)
-    const context = await browser.newContext({
-      viewport: null,
-      storageState: await state(input),
+    const browser = await launch(input.kind).catch((err) => {
+      log.error("browser launch failed", { ai: input.ai, browser: input.kind, error: String(err) })
+      throw new Error(`Failed to launch browser (${input.kind}): ${String(err)}`)
     })
-    const page = await context.newPage()
-    await page.goto(urls[input.ai], { waitUntil: "domcontentloaded", timeout: 30000 })
+    const context = await browser
+      .newContext({
+        viewport: null,
+        storageState: await state(input),
+      })
+      .catch((err) => {
+        log.error("context create failed", { ai: input.ai, browser: input.kind, error: String(err) })
+        throw new Error(`Failed to create browser context: ${String(err)}`)
+      })
+    const page = await context.newPage().catch((err) => {
+      log.error("new page failed", { ai: input.ai, browser: input.kind, error: String(err) })
+      throw new Error(`Failed to open browser page: ${String(err)}`)
+    })
+    await page.goto(urls[input.ai], { waitUntil: "domcontentloaded", timeout: 30000 }).catch((err) => {
+      log.error("login navigation failed", { ai: input.ai, browser: input.kind, error: String(err) })
+      throw new Error(`Failed to navigate to login page ${urls[input.ai]}: ${String(err)}`)
+    })
 
     login.set(key(input), { browser, context, ai: input.ai, kind: input.kind })
+    log.info("login browser ready", { ai: input.ai, browser: input.kind, key: key(input) })
     return { session: key(input) }
   }
 
   export async function confirmLogin(input: { ai: Ai; kind: BrowserKind }) {
+    log.info("confirm login", { ai: input.ai, browser: input.kind })
     const item = login.get(key(input))
     if (!item) throw new Error("no active login session")
     await item.context.storageState({ path: await storage(input) })
@@ -152,6 +169,12 @@ export namespace ChatWeb {
   }
 
   async function open(input: { sessionID: string; ai: Ai; kind: BrowserKind; chatID?: string }) {
+    log.info("open chat browser", {
+      sessionID: input.sessionID,
+      ai: input.ai,
+      browser: input.kind,
+      chatID: input.chatID,
+    })
     const prior = chat.get(input.sessionID)
     if (alive(prior) && prior?.ai === input.ai && prior.kind === input.kind) return prior
 
@@ -161,7 +184,10 @@ export namespace ChatWeb {
     const storageState = await state({ ai: input.ai, kind: input.kind })
     if (!storageState) throw new Error("No saved ChatWeb login found. Please login first.")
 
-    const browser = await launch(input.kind)
+    const browser = await launch(input.kind).catch((err) => {
+      log.error("chat launch failed", { sessionID: input.sessionID, ai: input.ai, browser: input.kind, error: String(err) })
+      throw new Error(`Failed to launch browser (${input.kind}): ${String(err)}`)
+    })
     const context = await browser.newContext({
       viewport: null,
       storageState,
@@ -172,7 +198,16 @@ export namespace ChatWeb {
         ? `https://chatgpt.com/c/${input.chatID}`
         : `https://claude.ai/chat/${input.chatID}`
       : urls[input.ai]
-    await page.goto(target, { waitUntil: "domcontentloaded", timeout: 45000 })
+    await page.goto(target, { waitUntil: "domcontentloaded", timeout: 45000 }).catch((err) => {
+      log.error("chat navigation failed", {
+        sessionID: input.sessionID,
+        ai: input.ai,
+        browser: input.kind,
+        target,
+        error: String(err),
+      })
+      throw new Error(`Failed to navigate to ${target}: ${String(err)}`)
+    })
     await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => undefined)
     await page.waitForTimeout(1500)
 
@@ -228,6 +263,7 @@ export namespace ChatWeb {
   }
 
   export async function prompt(input: { sessionID: string; text: string }) {
+    log.info("prompt chatweb", { sessionID: input.sessionID })
     const cfg = mode.get(input.sessionID)
     if (!cfg) return
 

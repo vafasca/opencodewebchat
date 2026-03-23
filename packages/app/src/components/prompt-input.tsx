@@ -340,11 +340,15 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
   const syncChatweb = async () => {
     setChatweb("loading", true)
+    const ctrl = new AbortController()
+    const timer = window.setTimeout(() => ctrl.abort(), 12000)
     const req = await fetch(`${sdk.url}/chatweb/status`, {
       headers: {
         "x-opencode-directory": sdk.directory,
       },
+      signal: ctrl.signal,
     }).catch(() => undefined)
+    clearTimeout(timer)
     const body = req ? await req.json().catch(() => undefined) : undefined
     const key = `${chatweb.ai}-${chatweb.browser}`
     const stat = body?.status?.[key]
@@ -366,6 +370,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
   const openChatweb = async () => {
     setChatweb("loading", true)
+    const ctrl = new AbortController()
+    const timer = window.setTimeout(() => ctrl.abort(), 45000)
     const req = await fetch(`${sdk.url}/chatweb/login`, {
       method: "POST",
       headers: {
@@ -376,13 +382,17 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         ai: chatweb.ai,
         browser: chatweb.browser,
       }),
+      signal: ctrl.signal,
     }).catch(() => undefined)
+    clearTimeout(timer)
     if (!req?.ok) {
+      const body = req ? await req.json().catch(() => undefined) : undefined
       setChatweb("loading", false)
+      setChatweb("opening", false)
       showToast({
         variant: "error",
         title: "ChatWeb",
-        description: "No se pudo abrir el login",
+        description: body?.error ?? "No se pudo abrir el login",
       })
       return
     }
@@ -396,6 +406,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
   const confirmChatweb = async () => {
     setChatweb("loading", true)
+    const ctrl = new AbortController()
+    const timer = window.setTimeout(() => ctrl.abort(), 20000)
     const req = await fetch(`${sdk.url}/chatweb/login`, {
       method: "PUT",
       headers: {
@@ -406,13 +418,16 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         ai: chatweb.ai,
         browser: chatweb.browser,
       }),
+      signal: ctrl.signal,
     }).catch(() => undefined)
+    clearTimeout(timer)
     if (!req?.ok) {
+      const body = req ? await req.json().catch(() => undefined) : undefined
       setChatweb("loading", false)
       showToast({
         variant: "error",
         title: "ChatWeb",
-        description: "No se pudo guardar el login",
+        description: body?.error ?? "No se pudo guardar el login",
       })
       return
     }

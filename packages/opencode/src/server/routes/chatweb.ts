@@ -21,9 +21,19 @@ export function ChatWebRoutes() {
       ),
       async (c) => {
         const body = c.req.valid("json")
-        const parsed = ChatWeb.parse(body)
-        const data = await ChatWeb.startLogin(parsed)
-        return c.json({ success: true, ...data })
+        try {
+          const parsed = ChatWeb.parse(body)
+          const data = await ChatWeb.startLogin(parsed)
+          return c.json({ success: true, ...data })
+        } catch (err) {
+          return c.json(
+            {
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+            },
+            500,
+          )
+        }
       },
     )
     .put(
@@ -37,9 +47,19 @@ export function ChatWebRoutes() {
       ),
       async (c) => {
         const body = c.req.valid("json")
-        const parsed = ChatWeb.parse(body)
-        await ChatWeb.confirmLogin(parsed)
-        return c.json({ success: true })
+        try {
+          const parsed = ChatWeb.parse(body)
+          await ChatWeb.confirmLogin(parsed)
+          return c.json({ success: true })
+        } catch (err) {
+          return c.json(
+            {
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+            },
+            500,
+          )
+        }
       },
     )
     .delete(
@@ -53,9 +73,19 @@ export function ChatWebRoutes() {
       ),
       async (c) => {
         const body = c.req.valid("json")
-        const parsed = ChatWeb.parse(body)
-        await ChatWeb.cancelLogin(parsed)
-        return c.json({ success: true })
+        try {
+          const parsed = ChatWeb.parse(body)
+          await ChatWeb.cancelLogin(parsed)
+          return c.json({ success: true })
+        } catch (err) {
+          return c.json(
+            {
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+            },
+            500,
+          )
+        }
       },
     )
     .post(
