@@ -69,7 +69,7 @@ export namespace ChatWeb {
   }
 
   async function launch(kind: BrowserKind) {
-    const args = ["--start-maximized", "--disable-blink-features=AutomationControlled"]
+    const args = ["--start-maximized"]
     const roots =
       kind === "chrome"
         ? [
@@ -105,32 +105,49 @@ export namespace ChatWeb {
           })),
       )
     ).find((item) => item.ok)?.item
-    if (bin) {
-      log.info("launch with executablePath", { kind, bin })
-      return chromium.launch({
-        executablePath: bin,
-        headless: false,
-        args,
-        timeout: 20000,
-      })
-    }
-
-    const browser = await chromium
-      .launch({
-        channel: channel(kind),
-        headless: false,
-        args,
-        timeout: 20000,
-      })
-      .catch(async (err) => {
-        log.warn("failed channel launch, fallback to default chromium", { kind, error: String(err) })
-        return chromium.launch({
+    const steps = [
+      ...(bin
+        ? [
+            {
+              mode: "executablePath",
+              options: {
+                executablePath: bin,
+                headless: false,
+                args,
+                timeout: 120000,
+              },
+            },
+          ]
+        : []),
+      {
+        mode: "channel",
+        options: {
+          channel: channel(kind),
           headless: false,
           args,
-          timeout: 20000,
-        })
-      })
-    return browser
+          timeout: 120000,
+        },
+      },
+      {
+        mode: "default",
+        options: {
+          headless: false,
+          args,
+          timeout: 120000,
+        },
+      },
+    ] as const
+    let err: unknown
+    for (const step of steps) {
+      try {
+        log.info("launch attempt", { kind, mode: step.mode, bin })
+        return await chromium.launch(step.options)
+      } catch (next) {
+        err = next
+        log.warn("launch attempt failed", { kind, mode: step.mode, error: String(next) })
+      }
+    }
+    throw err ?? new Error(`Failed to launch browser: ${kind}`)
   }
 
   function alive(value?: { browser: Browser; page?: Page }) {

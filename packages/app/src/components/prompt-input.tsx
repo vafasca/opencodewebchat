@@ -1830,6 +1830,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     classList={{
                       "h-7 px-2 text-12-medium": true,
                       "bg-surface-success-base/20 text-text-success": chatweb.logged,
+                      "bg-surface-danger-base/20 text-text-danger": !chatweb.logged,
                     }}
                     style={control()}
                     disabled={chatweb.loading}
@@ -1841,7 +1842,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                         ? "Logueado"
                         : chatweb.loading
                           ? "Verificando..."
-                          : "Login"}
+                          : "No login"}
                   </Button>
                 </Show>
               </div>
