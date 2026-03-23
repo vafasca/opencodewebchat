@@ -377,8 +377,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
   const openChatweb = async () => {
     setChatweb("loading", true)
-    const ctrl = new AbortController()
-    const timer = window.setTimeout(() => ctrl.abort(), 45000)
     try {
       console.info("[ChatWeb] login start", { ai: chatweb.ai, browser: chatweb.browser, url: sdk.url })
       const req = await fetch(`${sdk.url}/chatweb/login`, {
@@ -391,7 +389,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           ai: chatweb.ai,
           browser: chatweb.browser,
         }),
-        signal: ctrl.signal,
       }).catch((err) => {
         console.error("[ChatWeb] login request failed", err)
         return undefined
@@ -414,7 +411,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         description: "Login abierto. Inicia sesión y luego confirma.",
       })
     } finally {
-      clearTimeout(timer)
       setChatweb("loading", false)
     }
   }

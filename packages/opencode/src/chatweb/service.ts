@@ -162,10 +162,14 @@ export namespace ChatWeb {
       log.error("new page failed", { ai: input.ai, browser: input.kind, error: String(err) })
       throw new Error(`Failed to open browser page: ${String(err)}`)
     })
-    await page.goto(urls[input.ai], { waitUntil: "domcontentloaded", timeout: 30000 }).catch((err) => {
-      log.error("login navigation failed", { ai: input.ai, browser: input.kind, error: String(err) })
-      throw new Error(`Failed to navigate to login page ${urls[input.ai]}: ${String(err)}`)
-    })
+    void page
+      .goto(urls[input.ai], { waitUntil: "domcontentloaded", timeout: 45000 })
+      .then(() => {
+        log.info("login page opened", { ai: input.ai, browser: input.kind, url: urls[input.ai] })
+      })
+      .catch((err) => {
+        log.error("login navigation failed", { ai: input.ai, browser: input.kind, error: String(err) })
+      })
 
     login.set(key(input), { browser, context, ai: input.ai, kind: input.kind })
     log.info("login browser ready", { ai: input.ai, browser: input.kind, key: key(input) })
