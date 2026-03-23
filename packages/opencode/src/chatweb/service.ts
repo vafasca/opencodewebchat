@@ -48,6 +48,16 @@ export namespace ChatWeb {
     return path.join(dir, "storage-state.json")
   }
 
+  async function state(input: { ai: Ai; kind: BrowserKind }) {
+    const file = await storage(input)
+    const ok = await fs
+      .stat(file)
+      .then(() => true)
+      .catch(() => false)
+    if (!ok) return
+    return file
+  }
+
   function channel(input: BrowserKind) {
     if (input === "chrome") return "chrome"
     return "msedge"
@@ -56,6 +66,24 @@ export namespace ChatWeb {
   async function close(value?: { browser: Browser }) {
     if (!value) return
     await value.browser.close().catch(() => undefined)
+  }
+
+  async function launch(kind: BrowserKind) {
+    const args = ["--start-maximized", "--disable-blink-features=AutomationControlled"]
+    const browser = await chromium
+      .launch({
+        channel: channel(kind),
+        headless: false,
+        args,
+      })
+      .catch(async (err) => {
+        log.warn("failed channel launch, fallback to default chromium", { kind, error: String(err) })
+        return chromium.launch({
+          headless: false,
+          args,
+        })
+      })
+    return browser
   }
 
   function alive(value?: { browser: Browser; page?: Page }) {
@@ -69,14 +97,10 @@ export namespace ChatWeb {
     await close(login.get(key(input)))
     login.delete(key(input))
 
-    const browser = await chromium.launch({
-      channel: channel(input.kind),
-      headless: false,
-      args: ["--start-maximized", "--disable-blink-features=AutomationControlled"],
-    })
+    const browser = await launch(input.kind)
     const context = await browser.newContext({
       viewport: null,
-      storageState: await storage(input).catch(() => undefined),
+      storageState: await state(input),
     })
     const page = await context.newPage()
     await page.goto(urls[input.ai], { waitUntil: "domcontentloaded", timeout: 30000 })
@@ -102,19 +126,16 @@ export namespace ChatWeb {
 
   export async function status() {
     const all = await Promise.all(
-      Ai.flatMap((ai) => BrowserKind.map(async (kind) => ({ ai, kind, file: await storage({ ai, kind }) }))),
+      Ai.flatMap((ai) =>
+        BrowserKind.map(async (kind) => ({
+          key: `${ai}-${kind}`,
+          hasStorage: Boolean(await state({ ai, kind })),
+          loginOpen: alive(login.get(`${ai}-${kind}`)),
+        })),
+      ),
     )
 
-    return all.reduce(
-      (acc, item) => {
-        acc[`${item.ai}-${item.kind}`] = {
-          hasStorage: Bun.file(item.file).size > 0,
-          loginOpen: alive(login.get(`${item.ai}-${item.kind}`)),
-        }
-        return acc
-      },
-      {} as Record<string, { hasStorage: boolean; loginOpen: boolean }>,
-    )
+    return Object.fromEntries(all.map((item) => [item.key, { hasStorage: item.hasStorage, loginOpen: item.loginOpen }]))
   }
 
   export function setMode(input: { sessionID: string; ai: Ai; kind: BrowserKind; enabled: boolean }) {
@@ -137,14 +158,13 @@ export namespace ChatWeb {
     await close(prior)
     chat.delete(input.sessionID)
 
-    const browser = await chromium.launch({
-      channel: channel(input.kind),
-      headless: false,
-      args: ["--start-maximized", "--disable-blink-features=AutomationControlled"],
-    })
+    const storageState = await state({ ai: input.ai, kind: input.kind })
+    if (!storageState) throw new Error("No saved ChatWeb login found. Please login first.")
+
+    const browser = await launch(input.kind)
     const context = await browser.newContext({
       viewport: null,
-      storageState: await storage({ ai: input.ai, kind: input.kind }),
+      storageState,
     })
     const page = await context.newPage()
     const target = input.chatID
