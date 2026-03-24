@@ -1091,6 +1091,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     console.info("[webchat] status", { saved: result.saved === true, active: result.active === true })
   }
   const openLogin = async () => {
+    console.info("[webchat] login open click", { browser: browser(), target: target() })
     await callWebchat("/session/webchat/login", {
       method: "POST",
       body: JSON.stringify({ browser: browser(), target: target() }),
@@ -1098,6 +1099,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     await checkLogin()
   }
   const confirmLogin = async () => {
+    console.info("[webchat] login confirm click", { browser: browser(), target: target() })
     await callWebchat("/session/webchat/login/confirm", {
       method: "POST",
       body: JSON.stringify({ browser: browser(), target: target() }),
@@ -1556,6 +1558,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                   <Tooltip placement="top" value="Enable browser webchat mode (no API key model required)">
                     <Button
                       data-action="prompt-webchat"
+                      type="button"
                       variant={webchat() ? "secondary" : "ghost"}
                       size="normal"
                       class="min-w-0 text-13-regular text-text-base"
@@ -1575,6 +1578,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                       />
                       <Button
                         data-action="prompt-webchat-login"
+                        type="button"
                         variant="ghost"
                         size="normal"
                         class="min-w-0 text-13-regular text-text-base uppercase"
@@ -1585,6 +1589,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                       </Button>
                       <Button
                         data-action="prompt-webchat-login-confirm"
+                        type="button"
                         variant="ghost"
                         size="normal"
                         class="min-w-0 text-13-regular text-text-base uppercase"
@@ -1600,6 +1605,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     <Tooltip placement="top" value="Switch target chat (ChatGPT/Claude)">
                       <Button
                         data-action="prompt-webchat-target"
+                        type="button"
                         variant="ghost"
                         size="normal"
                         class="min-w-0 text-13-regular text-text-base uppercase"
@@ -1614,6 +1620,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     <Tooltip placement="top" value="Switch browser channel for webchat">
                       <Button
                         data-action="prompt-webchat-browser"
+                        type="button"
                         variant="ghost"
                         size="normal"
                         class="min-w-0 text-13-regular text-text-base uppercase"
