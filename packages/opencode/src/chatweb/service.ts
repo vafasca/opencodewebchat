@@ -48,6 +48,14 @@ export namespace ChatWeb {
     return path.join(dir, "storage-state.json")
   }
 
+  async function state(input: { ai: Ai; kind: BrowserKind }) {
+    const file = await storage(input)
+    if (Bun.file(file).size <= 0) return undefined
+    const text = await Bun.file(file).text().catch(() => "")
+    if (!text.trim()) return undefined
+    return file
+  }
+
   function channel(input: BrowserKind) {
     if (input === "chrome") return "chrome"
     return "msedge"
@@ -89,7 +97,7 @@ export namespace ChatWeb {
     const browser = await launch(input.kind)
     const context = await browser.newContext({
       viewport: null,
-      storageState: await storage(input).catch(() => undefined),
+      storageState: await state(input),
     })
     const page = await context.newPage()
     await visit(page, urls[input.ai])
@@ -154,7 +162,7 @@ export namespace ChatWeb {
     const browser = await launch(input.kind)
     const context = await browser.newContext({
       viewport: null,
-      storageState: await storage({ ai: input.ai, kind: input.kind }),
+      storageState: await state({ ai: input.ai, kind: input.kind }),
     })
     const page = await context.newPage()
     const target = input.chatID
