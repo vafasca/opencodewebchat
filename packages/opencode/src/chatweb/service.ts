@@ -53,6 +53,16 @@ export namespace ChatWeb {
     return "msedge"
   }
 
+  function launch(input: BrowserKind) {
+    return chromium.launch({
+      channel: channel(input),
+      headless: false,
+      timeout: 30000,
+      ignoreDefaultArgs: ["--no-startup-window"],
+      args: ["--start-maximized", "--disable-blink-features=AutomationControlled"],
+    })
+  }
+
   async function close(value?: { browser: Browser }) {
     if (!value) return
     await value.browser.close().catch(() => undefined)
@@ -69,11 +79,7 @@ export namespace ChatWeb {
     await close(login.get(key(input)))
     login.delete(key(input))
 
-    const browser = await chromium.launch({
-      channel: channel(input.kind),
-      headless: false,
-      args: ["--start-maximized", "--disable-blink-features=AutomationControlled"],
-    })
+    const browser = await launch(input.kind)
     const context = await browser.newContext({
       viewport: null,
       storageState: await storage(input).catch(() => undefined),
@@ -137,11 +143,7 @@ export namespace ChatWeb {
     await close(prior)
     chat.delete(input.sessionID)
 
-    const browser = await chromium.launch({
-      channel: channel(input.kind),
-      headless: false,
-      args: ["--start-maximized", "--disable-blink-features=AutomationControlled"],
-    })
+    const browser = await launch(input.kind)
     const context = await browser.newContext({
       viewport: null,
       storageState: await storage({ ai: input.ai, kind: input.kind }),
