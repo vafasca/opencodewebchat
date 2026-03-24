@@ -63,27 +63,43 @@ export namespace Webchat {
       await old.browser.close().catch(() => undefined)
       login.delete(key)
     }
-    const playwright = await import("playwright").catch(() => undefined)
+    const playwright = await import("playwright").catch((err) => {
+      const txt = err instanceof Error ? err.message : String(err)
+      log.error("webchat.login.open.playwright_import_failed", { error: txt })
+      return undefined
+    })
     if (!playwright) return false
     const channel = input.browser === "edge" ? "msedge" : "chrome"
     const opts = {
       headless: false,
       args: ["--start-maximized", "--disable-blink-features=AutomationControlled"],
     }
-    let browser = await playwright.chromium.launch({ channel, ...opts }).catch(() => undefined)
-    if (!browser) browser = await playwright.chromium.launch(opts).catch(() => undefined)
+    const bin = pickPath(input.browser)
+    let browser = await launchTry(playwright.chromium, {
+      ...(bin ? { executablePath: bin } : {}),
+      ...opts,
+    })
+    if (!browser) browser = await launchTry(playwright.chromium, { channel, ...opts })
+    if (!browser) browser = await launchTry(playwright.chromium, opts)
     if (!browser) {
-      const bin = pickPath(input.browser)
-      if (bin) browser = await playwright.chromium.launch({ executablePath: bin, ...opts }).catch(() => undefined)
+      log.error("webchat.login.open.launch_failed", {
+        browser: input.browser,
+        channel,
+        hasExecutablePath: bin ? true : false,
+      })
+      return false
     }
-    if (!browser) return false
     const file = storageFile(input)
     const context = await browser.newContext({
       viewport: null,
       ...(existsSync(file) ? { storageState: file } : {}),
     })
     const page = await context.newPage()
-    await page.goto(target[input.target].url, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => undefined)
+    await page.goto(target[input.target].url, { waitUntil: "domcontentloaded", timeout: 15000 }).catch((err) => {
+      const txt = err instanceof Error ? err.message : String(err)
+      log.warn("webchat.login.open.goto_failed", { key, error: txt })
+      return undefined
+    })
     login.set(key, { browser, context })
     log.info("webchat.login.open", { key, file })
     return true
@@ -367,6 +383,18 @@ export namespace Webchat {
     for (const item of path[input]) {
       if (existsSync(item)) return item
     }
+  }
+
+  const launchTry = async (
+    chromium: { launch: (opts: Record<string, unknown>) => Promise<Browser> },
+    opts: Record<string, unknown>,
+  ) => {
+    const timeout = 15000
+    const launch = chromium.launch(opts).catch(() => undefined)
+    const fail = new Promise<undefined>((resolve) => {
+      setTimeout(() => resolve(undefined), timeout)
+    })
+    return Promise.race([launch, fail])
   }
 
   const storageFile = (input: LoginInput) =>

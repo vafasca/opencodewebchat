@@ -1092,18 +1092,22 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   }
   const openLogin = async () => {
     console.info("[webchat] login open click", { browser: browser(), target: target() })
-    await callWebchat("/session/webchat/login", {
+    const res = await callWebchat("/session/webchat/login", {
       method: "POST",
       body: JSON.stringify({ browser: browser(), target: target() }),
     }).catch(() => undefined)
+    const result = await res?.clone().json().catch(() => undefined)
+    console.info("[webchat] login open result", result)
     await checkLogin()
   }
   const confirmLogin = async () => {
     console.info("[webchat] login confirm click", { browser: browser(), target: target() })
-    await callWebchat("/session/webchat/login/confirm", {
+    const res = await callWebchat("/session/webchat/login/confirm", {
       method: "POST",
       body: JSON.stringify({ browser: browser(), target: target() }),
     }).catch(() => undefined)
+    const result = await res?.clone().json().catch(() => undefined)
+    console.info("[webchat] login confirm result", result)
     await checkLogin()
   }
   const toggleWebchat = () => {
