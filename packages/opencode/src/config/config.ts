@@ -1087,11 +1087,13 @@ export namespace Config {
         .object({
           enabled: z.boolean().optional().describe("Enable browser-driven webchat mode by default"),
           browser: z.enum(["chrome", "edge"]).optional().describe("Browser channel used by webchat mode"),
+          target: z.enum(["chatgpt", "claude"]).optional().describe("Target chat UI for browser automation"),
           url: z.string().optional().describe("Chat URL opened by Playwright for each webchat prompt"),
           input_selector: z.string().optional().describe("CSS selector for the prompt input element"),
           response_selector: z.string().optional().describe("CSS selector for assistant response messages"),
           timeout: z.number().int().positive().optional().describe("Timeout in milliseconds for webchat automation"),
           settle: z.number().int().positive().optional().describe("Stabilization wait in milliseconds for response"),
+          headless: z.boolean().optional().describe("Run browser headless (default true in CI)"),
         })
         .optional()
         .describe("Browser webchat mode configuration"),

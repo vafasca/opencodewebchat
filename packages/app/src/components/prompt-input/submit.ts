@@ -37,6 +37,7 @@ export type FollowupDraft = {
   webchat?: {
     enabled: boolean
     browser: "chrome" | "edge"
+    target: "chatgpt" | "claude"
   }
 }
 
@@ -59,6 +60,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
     sessionID: input.draft.sessionID,
     enabled: input.draft.webchat?.enabled === true,
     browser: input.draft.webchat?.browser,
+    target: input.draft.webchat?.target,
   })
   const text = draftText(input.draft.prompt)
   const images = draftImages(input.draft.prompt)
@@ -198,6 +200,7 @@ type PromptSubmitInput = {
   onSubmit?: () => void
   webchatEnabled?: Accessor<boolean>
   webchatBrowser?: Accessor<"chrome" | "edge">
+  webchatTarget?: Accessor<"chatgpt" | "claude">
 }
 
 type CommentItem = {
@@ -314,6 +317,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     console.info("[webchat] handleSubmit", {
       webchatEnabled,
       browser: input.webchatBrowser?.(),
+      target: input.webchatTarget?.(),
       mode,
       hasModel: !!currentModel,
       hasAgent: !!currentAgent,
@@ -425,6 +429,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         ? {
             enabled: true,
             browser: input.webchatBrowser?.() ?? "chrome",
+            target: input.webchatTarget?.() ?? "chatgpt",
           }
         : undefined,
     }

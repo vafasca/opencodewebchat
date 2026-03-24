@@ -1058,15 +1058,21 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const variants = createMemo(() => ["default", ...local.model.variant.list()])
   const [webchat, setWebchat] = createSignal(false)
   const [browser, setBrowser] = createSignal<"chrome" | "edge">("chrome")
+  const [target, setTarget] = createSignal<"chatgpt" | "claude">("chatgpt")
   const toggleWebchat = () => {
     const next = !webchat()
-    console.info("[webchat] toggle", { enabled: next, browser: browser() })
+    console.info("[webchat] toggle", { enabled: next, browser: browser(), target: target() })
     setWebchat(next)
   }
   const toggleBrowser = () => {
     const next = browser() === "chrome" ? "edge" : "chrome"
     console.info("[webchat] browser", { browser: next })
     setBrowser(next)
+  }
+  const toggleTarget = () => {
+    const next = target() === "chatgpt" ? "claude" : "chatgpt"
+    console.info("[webchat] target", { target: next })
+    setTarget(next)
   }
   const accepting = createMemo(() => {
     const id = params.id
@@ -1109,6 +1115,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     onSubmit: props.onSubmit,
     webchatEnabled: webchat,
     webchatBrowser: browser,
+    webchatTarget: target,
   })
 
   const handleKeyDown = (event: KeyboardEvent) => {
@@ -1507,6 +1514,20 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                       Webchat
                     </Button>
                   </Tooltip>
+                  <Show when={webchat()}>
+                    <Tooltip placement="top" value="Switch target chat (ChatGPT/Claude)">
+                      <Button
+                        data-action="prompt-webchat-target"
+                        variant="ghost"
+                        size="normal"
+                        class="min-w-0 text-13-regular text-text-base uppercase"
+                        style={control()}
+                        onClick={toggleTarget}
+                      >
+                        {target()}
+                      </Button>
+                    </Tooltip>
+                  </Show>
                   <Show when={webchat()}>
                     <Tooltip placement="top" value="Switch browser channel for webchat">
                       <Button

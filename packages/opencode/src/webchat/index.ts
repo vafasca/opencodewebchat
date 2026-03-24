@@ -1,35 +1,58 @@
 import { Log } from "@/util/log"
 import { Process } from "@/util/process"
+import type { Page } from "playwright"
 
 export namespace Webchat {
   const log = Log.create({ service: "webchat" })
 
-  export const DEFAULT_URL = "https://chat.openai.com/"
+  export const DEFAULT_URL = "https://chatgpt.com/"
+
+  const target = {
+    chatgpt: {
+      url: "https://chatgpt.com/",
+      input: ["textarea", "#prompt-textarea"],
+      response: [
+        "[data-message-author-role='assistant']",
+        "article[data-testid='conversation-turn']",
+      ],
+    },
+    claude: {
+      url: "https://claude.ai/new",
+      input: ["div[contenteditable='true']", "textarea"],
+      response: ["div[data-is-streaming]", "div.font-claude-message", "div[data-testid='message-content']"],
+    },
+  } as const
 
   export type Input = {
     prompt: string
     browser: "chrome" | "edge"
+    target?: "chatgpt" | "claude"
     url?: string
     timeout?: number
     input?: string
     response?: string
     settle?: number
+    headless?: boolean
   }
 
   export const run = async (input: Input) => {
-    const timeout = input.timeout ?? 180000
-    const inputSelector = input.input ?? "textarea"
-    const responseSelector = input.response ?? "[data-message-author-role='assistant']"
+    const mode = input.target ?? "chatgpt"
+    const cfg = target[mode]
+    const timeout = input.timeout ?? 60000
+    const inputs = input.input ? [input.input] : cfg.input
+    const outputs = input.response ? [input.response] : cfg.response
     const settle = input.settle ?? 1500
-    const url = input.url ?? DEFAULT_URL
+    const url = input.url ?? cfg.url ?? DEFAULT_URL
     const channel = input.browser === "edge" ? "msedge" : "chrome"
     log.info("webchat.run.start", {
+      target: mode,
       browser: input.browser,
       channel,
       timeout,
       url,
-      inputSelector,
-      responseSelector,
+      inputs,
+      outputs,
+      headless: input.headless ?? Process.isCI,
     })
 
     if (!input.prompt.trim()) {
@@ -40,7 +63,7 @@ export namespace Webchat {
     const playwright = await import("playwright")
     const browser = await playwright.chromium.launch({
       channel,
-      headless: Process.isCI ? true : false,
+      headless: input.headless ?? Process.isCI,
     })
     const ctx = await browser.newContext()
     const page = await ctx.newPage()
@@ -49,17 +72,33 @@ export namespace Webchat {
       timeout,
     })
     log.info("webchat.run.ready")
-    await page.waitForSelector(inputSelector, { timeout })
-    await page.fill(inputSelector, input.prompt)
+    const inputSel = await findInput(page, inputs, timeout)
+    if (!inputSel) {
+      const msg = "No se encontró el input del chat. Verifica login, target y selector."
+      log.error("webchat.run.input_missing", { target: mode, inputs })
+      await ctx.close().catch(() => undefined)
+      await browser.close().catch(() => undefined)
+      return msg
+    }
+    log.info("webchat.run.input_found", { input: inputSel })
+    await page.locator(inputSel).fill(input.prompt)
     await page.keyboard.press("Enter")
     log.info("webchat.run.sent")
-    await page.waitForSelector(responseSelector, { timeout })
+    const responseSel = await findOutput(page, outputs, timeout)
+    if (!responseSel) {
+      const msg = "No se detectó respuesta del chat. Revisa autenticación y selectores."
+      log.error("webchat.run.output_missing", { target: mode, outputs })
+      await ctx.close().catch(() => undefined)
+      await browser.close().catch(() => undefined)
+      return msg
+    }
+    log.info("webchat.run.output_found", { output: responseSel })
 
     let text = ""
     let same = 0
     for (let i = 0; i < 120; i++) {
       const val = await page
-        .locator(responseSelector)
+        .locator(responseSel)
         .last()
         .innerText({ timeout: 5000 })
         .catch(() => "")
@@ -84,5 +123,25 @@ export namespace Webchat {
       size: text.length,
     })
     return text
+  }
+
+  const findInput = async (page: Page, list: string[], timeout: number) => {
+    for (const item of list) {
+      const ok = await page
+        .waitForSelector(item, { timeout: Math.floor(timeout / Math.max(1, list.length)) })
+        .then(() => true)
+        .catch(() => false)
+      if (ok) return item
+    }
+  }
+
+  const findOutput = async (page: Page, list: string[], timeout: number) => {
+    for (const item of list) {
+      const ok = await page
+        .waitForSelector(item, { timeout: Math.floor(timeout / Math.max(1, list.length)) })
+        .then(() => true)
+        .catch(() => false)
+      if (ok) return item
+    }
   }
 }

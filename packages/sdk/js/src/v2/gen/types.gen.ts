@@ -3318,6 +3318,7 @@ export type SessionPromptData = {
     webchat?: {
       enabled?: boolean
       browser?: "chrome" | "edge"
+      target?: "chatgpt" | "claude"
     }
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
@@ -3522,6 +3523,7 @@ export type SessionPromptAsyncData = {
     webchat?: {
       enabled?: boolean
       browser?: "chrome" | "edge"
+      target?: "chatgpt" | "claude"
     }
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }

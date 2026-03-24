@@ -1844,6 +1844,7 @@ export class Session2 extends HeyApiClient {
       webchat?: {
         enabled?: boolean
         browser?: "chrome" | "edge"
+        target?: "chatgpt" | "claude"
       }
       parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
     },
@@ -1981,6 +1982,7 @@ export class Session2 extends HeyApiClient {
       webchat?: {
         enabled?: boolean
         browser?: "chrome" | "edge"
+        target?: "chatgpt" | "claude"
       }
       parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
     },

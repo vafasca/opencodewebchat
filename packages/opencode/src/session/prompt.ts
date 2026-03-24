@@ -118,6 +118,7 @@ export namespace SessionPrompt {
       .object({
         enabled: z.boolean().optional(),
         browser: z.enum(["chrome", "edge"]).optional(),
+        target: z.enum(["chatgpt", "claude"]).optional(),
       })
       .optional(),
     parts: z.array(
@@ -223,11 +224,13 @@ export namespace SessionPrompt {
     const content = await Webchat.run({
       prompt: txt,
       browser: input.input.webchat?.browser ?? cfg.webchat?.browser ?? "chrome",
+      target: input.input.webchat?.target ?? cfg.webchat?.target ?? "chatgpt",
       url: cfg.webchat?.url,
       timeout: cfg.webchat?.timeout,
       input: cfg.webchat?.input_selector,
       response: cfg.webchat?.response_selector,
       settle: cfg.webchat?.settle,
+      headless: cfg.webchat?.headless,
     })
     const model = input.message.info.model
     const assistant = (await Session.updateMessage({
