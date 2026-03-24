@@ -70,32 +70,49 @@ export namespace ChatWeb {
 
   async function launch(kind: BrowserKind) {
     const args = ["--start-maximized"]
-    const roots =
+    const rootsRaw =
       kind === "chrome"
         ? [
+            "C:/Program Files/Google/Chrome/Application/chrome.exe",
+            "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
             process.env["PROGRAMFILES"] ? path.join(process.env["PROGRAMFILES"], "Google/Chrome/Application/chrome.exe") : "",
+            process.env["ProgramFiles"] ? path.join(process.env["ProgramFiles"], "Google/Chrome/Application/chrome.exe") : "",
+            process.env["PROGRAMW6432"] ? path.join(process.env["PROGRAMW6432"], "Google/Chrome/Application/chrome.exe") : "",
             process.env["PROGRAMFILES(X86)"]
               ? path.join(process.env["PROGRAMFILES(X86)"], "Google/Chrome/Application/chrome.exe")
+              : "",
+            process.env["ProgramFiles(x86)"]
+              ? path.join(process.env["ProgramFiles(x86)"], "Google/Chrome/Application/chrome.exe")
               : "",
             process.env["LOCALAPPDATA"]
               ? path.join(process.env["LOCALAPPDATA"], "Google/Chrome/Application/chrome.exe")
               : "",
+            process.env["LocalAppData"] ? path.join(process.env["LocalAppData"], "Google/Chrome/Application/chrome.exe") : "",
           ]
         : [
+            "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
+            "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
             process.env["PROGRAMFILES"]
               ? path.join(process.env["PROGRAMFILES"], "Microsoft/Edge/Application/msedge.exe")
               : "",
+            process.env["ProgramFiles"] ? path.join(process.env["ProgramFiles"], "Microsoft/Edge/Application/msedge.exe") : "",
+            process.env["PROGRAMW6432"] ? path.join(process.env["PROGRAMW6432"], "Microsoft/Edge/Application/msedge.exe") : "",
             process.env["PROGRAMFILES(X86)"]
               ? path.join(process.env["PROGRAMFILES(X86)"], "Microsoft/Edge/Application/msedge.exe")
+              : "",
+            process.env["ProgramFiles(x86)"]
+              ? path.join(process.env["ProgramFiles(x86)"], "Microsoft/Edge/Application/msedge.exe")
               : "",
             process.env["LOCALAPPDATA"]
               ? path.join(process.env["LOCALAPPDATA"], "Microsoft/Edge/Application/msedge.exe")
               : "",
+            process.env["LocalAppData"] ? path.join(process.env["LocalAppData"], "Microsoft/Edge/Application/msedge.exe") : "",
           ]
+    const roots = Array.from(new Set(rootsRaw.filter((item) => item)))
+    log.info("browser candidate paths", { kind, count: roots.length, roots })
     const bin = (
       await Promise.all(
         roots
-          .filter((item) => item)
           .map(async (item) => ({
             item,
             ok: await fs
@@ -146,6 +163,12 @@ export namespace ChatWeb {
         err = next
         log.warn("launch attempt failed", { kind, mode: step.mode, error: String(next) })
       }
+    }
+    const tail = String(err ?? "")
+    if (tail.includes("Executable doesn't exist")) {
+      throw new Error(
+        `Failed to launch ${kind}. Browser executable not found in known paths. Install ${kind} or select another browser.`,
+      )
     }
     throw err ?? new Error(`Failed to launch browser: ${kind}`)
   }
