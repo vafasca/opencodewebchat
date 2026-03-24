@@ -65,7 +65,7 @@ export namespace ChatWeb {
 
   async function visit(page: Page, url: string) {
     await page.bringToFront().catch(() => undefined)
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 })
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => undefined)
     if (page.url() !== "about:blank") return
     await page.goto(url, { waitUntil: "load", timeout: 30000 }).catch(() => undefined)
   }
@@ -93,6 +93,7 @@ export namespace ChatWeb {
     })
     const page = await context.newPage()
     await visit(page, urls[input.ai])
+    await page.bringToFront().catch(() => undefined)
 
     login.set(key(input), { browser, context, ai: input.ai, kind: input.kind })
     return { session: key(input) }

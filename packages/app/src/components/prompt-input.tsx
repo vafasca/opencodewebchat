@@ -1075,9 +1075,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   })
   const webkey = createMemo(() => `${chatweb.ai}-${chatweb.browser}`)
   const weburl = (input: string) => new URL(input, sdk.url).toString()
-  const webfetch = async (url: string, init?: RequestInit) => {
+  const webfetch = async (url: string, init?: RequestInit, timeout = 15000) => {
     const abort = new AbortController()
-    const timer = setTimeout(() => abort.abort(), 15000)
+    const timer = setTimeout(() => abort.abort(), timeout)
     try {
       const res = await fetch(weburl(url), {
         ...init,
@@ -1120,7 +1120,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           ai: chatweb.ai,
           browser: chatweb.browser,
         }),
-      })
+      }, 180000)
       await webstatus()
     } finally {
       setWeb("load", false)
@@ -1135,7 +1135,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           ai: chatweb.ai,
           browser: chatweb.browser,
         }),
-      })
+      }, 60000)
       await webstatus()
       await webmode(true)
     } finally {
