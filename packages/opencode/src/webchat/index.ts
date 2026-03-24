@@ -170,8 +170,7 @@ export namespace Webchat {
       return msg
     }
     log.info("webchat.run.input_found", { input: inputSel })
-    await page.locator(inputSel).fill(input.prompt)
-    await page.keyboard.press("Enter")
+    await send(page, inputSel, input.prompt, mode)
     log.info("webchat.run.sent")
     const responseSel = await findOutput(page, outputs, timeout)
     if (!responseSel) {
@@ -232,6 +231,37 @@ export namespace Webchat {
         .catch(() => false)
       if (ok) return item
     }
+  }
+
+  const send = async (page: Page, input: string, txt: string, mode: "chatgpt" | "claude") => {
+    await page.locator(input).fill(txt)
+    await page.keyboard.press("Enter")
+    await page.waitForTimeout(700)
+    const stuck = await page
+      .locator(input)
+      .evaluate((el, expected) => {
+        if (el instanceof HTMLTextAreaElement) return el.value.includes(expected)
+        const val = el.textContent ?? ""
+        return val.includes(expected)
+      }, txt)
+      .catch(() => false)
+    if (!stuck) return
+    const list =
+      mode === "chatgpt"
+        ? ["button[data-testid='send-button']", "button[aria-label*='Send']", "form button[type='submit']"]
+        : ["button[aria-label*='Send']", "form button[type='submit']"]
+    for (const item of list) {
+      const ok = await page
+        .locator(item)
+        .first()
+        .click({ timeout: 1500 })
+        .then(() => true)
+        .catch(() => false)
+      if (!ok) continue
+      log.warn("webchat.run.send_click_fallback", { selector: item })
+      return
+    }
+    log.warn("webchat.run.send_fallback_failed")
   }
 
   const pickPath = (input: "chrome" | "edge") => {

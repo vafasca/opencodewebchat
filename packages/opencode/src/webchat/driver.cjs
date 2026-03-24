@@ -53,6 +53,35 @@ const find = async (page, list, timeout) => {
   }
 }
 
+const send = async (page, input, txt, mode) => {
+  await page.locator(input).fill(txt)
+  await page.keyboard.press("Enter")
+  await page.waitForTimeout(700)
+  const stuck = await page
+    .locator(input)
+    .evaluate((el, expected) => {
+      if (el instanceof HTMLTextAreaElement) return el.value.includes(expected)
+      const val = el.textContent || ""
+      return val.includes(expected)
+    }, txt)
+    .catch(() => false)
+  if (!stuck) return
+  const list =
+    mode === "chatgpt"
+      ? ["button[data-testid='send-button']", "button[aria-label*='Send']", "form button[type='submit']"]
+      : ["button[aria-label*='Send']", "form button[type='submit']"]
+  for (const item of list) {
+    const ok = await page
+      .locator(item)
+      .first()
+      .click({ timeout: 1500 })
+      .then(() => true)
+      .catch(() => false)
+    if (!ok) continue
+    return
+  }
+}
+
 const run = async () => {
   const raw = await read()
   const data = JSON.parse(raw || "{}")
@@ -93,8 +122,7 @@ const run = async () => {
     await browser.close().catch(() => undefined)
     return { ok: false, error: "node-driver input selector missing." }
   }
-  await page.locator(input).fill(data.prompt || "")
-  await page.keyboard.press("Enter")
+  await send(page, input, data.prompt || "", mode)
   const output = await find(page, outputs, timeout)
   if (!output) {
     await ctx.close().catch(() => undefined)
