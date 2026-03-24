@@ -1,6 +1,7 @@
 const { chromium } = require("playwright")
 const { existsSync } = require("fs")
 const { mkdir } = require("fs/promises")
+const { writeFile } = require("fs/promises")
 const pathUtil = require("path")
 
 const target = {
@@ -111,6 +112,55 @@ const loginRequired = async (page, mode) => {
 const run = async () => {
   const raw = await read()
   const data = JSON.parse(raw || "{}")
+  if (data.action === "login_open") {
+    const mode = data.target === "claude" ? "claude" : "chatgpt"
+    const cfg = target[mode]
+    const url = data.url || cfg.url
+    const channel = data.browser === "edge" ? "msedge" : "chrome"
+    const opts = {
+      headless: false,
+      args: ["--start-maximized", "--disable-blink-features=AutomationControlled"],
+    }
+    let browser = await chromium.launch({ channel, ...opts }).catch(() => undefined)
+    if (!browser) browser = await chromium.launch({ ...opts }).catch(() => undefined)
+    if (!browser) {
+      const bin = pick(data.browser)
+      if (bin) browser = await chromium.launch({ executablePath: bin, ...opts }).catch(() => undefined)
+    }
+    if (!browser) return { ok: false, error: "login_open launch failed" }
+    const ctx = await browser.newContext({
+      viewport: null,
+      ...(data.storage && existsSync(data.storage) ? { storageState: data.storage } : {}),
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    })
+    const save = async () => {
+      if (!data.storage) return
+      await mkdir(pathUtil.dirname(data.storage), { recursive: true }).catch(() => undefined)
+      await ctx.storageState({ path: data.storage }).catch(() => undefined)
+    }
+    if (data.pidpath) {
+      await mkdir(pathUtil.dirname(data.pidpath), { recursive: true }).catch(() => undefined)
+      await writeFile(data.pidpath, String(process.pid)).catch(() => undefined)
+    }
+    const end = async () => {
+      await save()
+      await ctx.close().catch(() => undefined)
+      await browser.close().catch(() => undefined)
+      process.exit(0)
+    }
+    process.on("SIGINT", end)
+    process.on("SIGTERM", end)
+    browser.on("disconnected", () => {
+      end()
+    })
+    const page = await ctx.newPage()
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => undefined)
+    setInterval(() => {
+      save()
+    }, 2000)
+    return new Promise(() => {})
+  }
   const mode = data.target === "claude" ? "claude" : "chatgpt"
   const cfg = target[mode]
   const timeout = data.timeout || 60000

@@ -57,6 +57,9 @@ export namespace Webchat {
   }
 
   export const loginOpen = async (input: LoginInput) => {
+    if (process.platform === "win32") {
+      return nodeLoginOpen(input)
+    }
     const key = `${input.target}:${input.browser}`
     const old = login.get(key)
     if (old) {
@@ -106,6 +109,9 @@ export namespace Webchat {
   }
 
   export const loginConfirm = async (input: LoginInput) => {
+    if (process.platform === "win32") {
+      return nodeLoginConfirm(input)
+    }
     const key = `${input.target}:${input.browser}`
     const item = login.get(key)
     if (!item) return false
@@ -119,6 +125,13 @@ export namespace Webchat {
   }
 
   export const loginStatus = async (input: LoginInput) => {
+    if (process.platform === "win32") {
+      const file = storageFile(input)
+      return {
+        active: await pidAlive(input),
+        saved: existsSync(file),
+      }
+    }
     const key = `${input.target}:${input.browser}`
     const file = storageFile(input)
     return {
@@ -399,6 +412,74 @@ export namespace Webchat {
 
   const storageFile = (input: LoginInput) =>
     pathUtil.join(os.homedir(), ".opencode", "webchat", `${input.target}-${input.browser}.json`)
+
+  const pidFile = (input: LoginInput) => pathUtil.join(os.homedir(), ".opencode", "webchat", `${input.target}-${input.browser}.pid`)
+
+  const pidAlive = async (input: LoginInput) => {
+    const file = pidFile(input)
+    if (!existsSync(file)) return false
+    const txt = await Bun.file(file).text().catch(() => "")
+    const pid = Number(txt.trim())
+    if (!Number.isFinite(pid) || pid <= 0) return false
+    return alive(pid)
+  }
+
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  const kill = (pid: number) => {
+    try {
+      process.kill(pid)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  const nodeLoginOpen = async (input: LoginInput) => {
+    const file = fileURLToPath(new URL("./driver.cjs", import.meta.url))
+    const storage = storageFile(input)
+    const pidpath = pidFile(input)
+    const raw = await Bun.file(pidpath).text().catch(() => "")
+    const pid = Number(raw.trim())
+    if (Number.isFinite(pid) && pid > 0) kill(pid)
+    await mkdir(pathUtil.dirname(pidpath), { recursive: true })
+    const proc = Bun.spawn(["node", file], {
+      stdin: "pipe",
+      stdout: "ignore",
+      stderr: "ignore",
+      detached: true,
+    })
+    proc.stdin.write(
+      JSON.stringify({
+        action: "login_open",
+        browser: input.browser,
+        target: input.target,
+        storage,
+        pidpath,
+      }),
+    )
+    proc.stdin.end()
+    log.info("webchat.login.open.node_driver", { browser: input.browser, target: input.target, pid: proc.pid })
+    return true
+  }
+
+  const nodeLoginConfirm = async (input: LoginInput) => {
+    const file = pidFile(input)
+    const raw = await Bun.file(file).text().catch(() => "")
+    const pid = Number(raw.trim())
+    if (!Number.isFinite(pid) || pid <= 0) return existsSync(storageFile(input))
+    const ok = kill(pid)
+    await Bun.sleep(700)
+    log.info("webchat.login.confirm.node_driver", { browser: input.browser, target: input.target, pid, ok })
+    return existsSync(storageFile(input))
+  }
 
   const nodeRun = async (input: {
     browser: "chrome" | "edge"
