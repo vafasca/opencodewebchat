@@ -3,6 +3,7 @@ import path from "path"
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright"
 import { Log } from "@/util/log"
 import { Global } from "@/global"
+import { spawnSync } from "child_process"
 
 export namespace ChatWeb {
   const log = Log.create({ service: "chatweb" })
@@ -70,6 +71,13 @@ export namespace ChatWeb {
 
   async function launch(kind: BrowserKind) {
     const args = ["--start-maximized"]
+    const bins =
+      process.platform === "win32"
+        ? spawnSync("where", [kind === "edge" ? "msedge" : "chrome"], { encoding: "utf8" }).stdout
+            .split(/\r?\n/)
+            .map((item) => item.trim())
+            .filter((item) => item)
+        : []
     const rootsRaw =
       kind === "chrome"
         ? [
@@ -88,6 +96,7 @@ export namespace ChatWeb {
               ? path.join(process.env["LOCALAPPDATA"], "Google/Chrome/Application/chrome.exe")
               : "",
             process.env["LocalAppData"] ? path.join(process.env["LocalAppData"], "Google/Chrome/Application/chrome.exe") : "",
+            ...bins,
           ]
         : [
             "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
@@ -107,6 +116,7 @@ export namespace ChatWeb {
               ? path.join(process.env["LOCALAPPDATA"], "Microsoft/Edge/Application/msedge.exe")
               : "",
             process.env["LocalAppData"] ? path.join(process.env["LocalAppData"], "Microsoft/Edge/Application/msedge.exe") : "",
+            ...bins,
           ]
     const roots = Array.from(new Set(rootsRaw.filter((item) => item)))
     log.info("browser candidate paths", { kind, count: roots.length, roots })
