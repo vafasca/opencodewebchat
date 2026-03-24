@@ -55,7 +55,8 @@ const find = async (page, list, timeout) => {
 
 const send = async (page, input, txt, mode) => {
   await page.locator(input).fill(txt)
-  await page.keyboard.press("Enter")
+  await page.locator(input).click().catch(() => undefined)
+  await page.locator(input).press("Enter").catch(() => page.keyboard.press("Enter"))
   await page.waitForTimeout(700)
   const stuck = await page
     .locator(input)
@@ -68,8 +69,14 @@ const send = async (page, input, txt, mode) => {
   if (!stuck) return
   const list =
     mode === "chatgpt"
-      ? ["button[data-testid='send-button']", "button[aria-label*='Send']", "form button[type='submit']"]
-      : ["button[aria-label*='Send']", "form button[type='submit']"]
+      ? [
+          "button[data-testid='send-button']",
+          "button[aria-label*='Send']",
+          "button[aria-label*='Enviar']",
+          "button[aria-label*='mensaje']",
+          "form button[type='submit']",
+        ]
+      : ["button[aria-label*='Send']", "button[aria-label*='Enviar']", "form button[type='submit']"]
   for (const item of list) {
     const ok = await page
       .locator(item)
@@ -80,6 +87,23 @@ const send = async (page, input, txt, mode) => {
     if (!ok) continue
     return
   }
+}
+
+const loginRequired = async (page, mode) => {
+  const list =
+    mode === "chatgpt"
+      ? ["button:has-text('Iniciar sesión')", "button:has-text('Log in')"]
+      : ["button:has-text('Log in')", "button:has-text('Sign in')"]
+  for (const item of list) {
+    const ok = await page
+      .locator(item)
+      .first()
+      .isVisible()
+      .catch(() => false)
+    if (!ok) continue
+    return true
+  }
+  return false
 }
 
 const run = async () => {
@@ -116,6 +140,11 @@ const run = async () => {
   })
   const page = await ctx.newPage()
   await page.goto(url, { waitUntil: "domcontentloaded", timeout })
+  if (await loginRequired(page, mode)) {
+    await ctx.close().catch(() => undefined)
+    await browser.close().catch(() => undefined)
+    return { ok: false, error: "login required in target chat." }
+  }
   const input = await find(page, inputs, timeout)
   if (!input) {
     await ctx.close().catch(() => undefined)

@@ -160,6 +160,12 @@ export namespace Webchat {
       waitUntil: "domcontentloaded",
       timeout,
     })
+    const gate = await loginRequired(page, mode)
+    if (gate) {
+      await ctx.close().catch(() => undefined)
+      await browser.close().catch(() => undefined)
+      return gate
+    }
     log.info("webchat.run.ready")
     const inputSel = await findInput(page, inputs, timeout)
     if (!inputSel) {
@@ -235,7 +241,8 @@ export namespace Webchat {
 
   const send = async (page: Page, input: string, txt: string, mode: "chatgpt" | "claude") => {
     await page.locator(input).fill(txt)
-    await page.keyboard.press("Enter")
+    await page.locator(input).click().catch(() => undefined)
+    await page.locator(input).press("Enter").catch(() => page.keyboard.press("Enter"))
     await page.waitForTimeout(700)
     const stuck = await page
       .locator(input)
@@ -248,8 +255,14 @@ export namespace Webchat {
     if (!stuck) return
     const list =
       mode === "chatgpt"
-        ? ["button[data-testid='send-button']", "button[aria-label*='Send']", "form button[type='submit']"]
-        : ["button[aria-label*='Send']", "form button[type='submit']"]
+        ? [
+            "button[data-testid='send-button']",
+            "button[aria-label*='Send']",
+            "button[aria-label*='Enviar']",
+            "button[aria-label*='mensaje']",
+            "form button[type='submit']",
+          ]
+        : ["button[aria-label*='Send']", "button[aria-label*='Enviar']", "form button[type='submit']"]
     for (const item of list) {
       const ok = await page
         .locator(item)
@@ -262,6 +275,23 @@ export namespace Webchat {
       return
     }
     log.warn("webchat.run.send_fallback_failed")
+  }
+
+  const loginRequired = async (page: Page, mode: "chatgpt" | "claude") => {
+    const keys =
+      mode === "chatgpt"
+        ? ["button:has-text('Iniciar sesión')", "button:has-text('Log in')"]
+        : ["button:has-text('Log in')", "button:has-text('Sign in')"]
+    for (const item of keys) {
+      const ok = await page
+        .locator(item)
+        .first()
+        .isVisible()
+        .catch(() => false)
+      if (!ok) continue
+      log.warn("webchat.run.login_required", { selector: item })
+      return "Debes iniciar sesión en el chat objetivo para permitir envío automático."
+    }
   }
 
   const pickPath = (input: "chrome" | "edge") => {
