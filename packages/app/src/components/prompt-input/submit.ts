@@ -169,6 +169,11 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       variant: input.draft.variant,
       webchat: input.draft.webchat,
     } as any
+    if (input.draft.webchat?.enabled) {
+      console.info("[webchat] sending sync prompt request")
+      await input.client.session.prompt(body)
+      return true
+    }
     await input.client.session.promptAsync(body)
     return true
   } catch (err) {

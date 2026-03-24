@@ -814,6 +814,12 @@ export const SessionRoutes = lazy(() =>
         return stream(c, async (stream) => {
           const sessionID = c.req.valid("param").sessionID
           const body = c.req.valid("json")
+          log.info("session.prompt.request", {
+            sessionID,
+            webchat: body.webchat?.enabled === true,
+            browser: body.webchat?.browser,
+            target: body.webchat?.target,
+          })
           const msg = await SessionPrompt.prompt({ ...body, sessionID })
           stream.write(JSON.stringify(msg))
         })
@@ -846,6 +852,12 @@ export const SessionRoutes = lazy(() =>
         return stream(c, async () => {
           const sessionID = c.req.valid("param").sessionID
           const body = c.req.valid("json")
+          log.info("session.prompt_async.request", {
+            sessionID,
+            webchat: body.webchat?.enabled === true,
+            browser: body.webchat?.browser,
+            target: body.webchat?.target,
+          })
           SessionPrompt.prompt({ ...body, sessionID })
         })
       },
