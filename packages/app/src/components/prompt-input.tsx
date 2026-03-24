@@ -1076,15 +1076,22 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const webkey = createMemo(() => `${chatweb.ai}-${chatweb.browser}`)
   const weburl = (input: string) => new URL(input, sdk.url).toString()
   const webfetch = async (url: string, init?: RequestInit) => {
-    const res = await fetch(weburl(url), {
-      ...init,
-      headers: {
-        "content-type": "application/json",
-        ...init?.headers,
-      },
-    })
-    if (!res.ok) throw new Error(await res.text().catch(() => "request failed"))
-    return res.json().catch(() => ({}))
+    const abort = new AbortController()
+    const timer = setTimeout(() => abort.abort(), 15000)
+    try {
+      const res = await fetch(weburl(url), {
+        ...init,
+        signal: abort.signal,
+        headers: {
+          "content-type": "application/json",
+          ...init?.headers,
+        },
+      })
+      if (!res.ok) throw new Error(await res.text().catch(() => "request failed"))
+      return res.json().catch(() => ({}))
+    } finally {
+      clearTimeout(timer)
+    }
   }
   const webstatus = async () => {
     const data = await webfetch("/chatweb/status")
@@ -1106,28 +1113,34 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   }
   const weblogin = async () => {
     setWeb("load", true)
-    await webfetch("/chatweb/login", {
-      method: "POST",
-      body: JSON.stringify({
-        ai: chatweb.ai,
-        browser: chatweb.browser,
-      }),
-    })
-    await webstatus()
-    setWeb("load", false)
+    try {
+      await webfetch("/chatweb/login", {
+        method: "POST",
+        body: JSON.stringify({
+          ai: chatweb.ai,
+          browser: chatweb.browser,
+        }),
+      })
+      await webstatus()
+    } finally {
+      setWeb("load", false)
+    }
   }
   const websave = async () => {
     setWeb("load", true)
-    await webfetch("/chatweb/login", {
-      method: "PUT",
-      body: JSON.stringify({
-        ai: chatweb.ai,
-        browser: chatweb.browser,
-      }),
-    })
-    await webstatus()
-    await webmode(true)
-    setWeb("load", false)
+    try {
+      await webfetch("/chatweb/login", {
+        method: "PUT",
+        body: JSON.stringify({
+          ai: chatweb.ai,
+          browser: chatweb.browser,
+        }),
+      })
+      await webstatus()
+      await webmode(true)
+    } finally {
+      setWeb("load", false)
+    }
   }
   const webtap = async () => {
     if (web.load) return
