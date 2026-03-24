@@ -1736,7 +1736,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     class="min-w-0 max-w-[160px] text-13-regular text-text-base"
                     style={control()}
                     onClick={() => void webconfirm()}
-                    disabled={web.load || !web.open}
+                    disabled={web.load}
                   >
                     <span class="truncate">{webconfirmtext()}</span>
                   </Button>

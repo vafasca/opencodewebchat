@@ -63,6 +63,13 @@ export namespace ChatWeb {
     })
   }
 
+  async function visit(page: Page, url: string) {
+    await page.bringToFront().catch(() => undefined)
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 })
+    if (page.url() !== "about:blank") return
+    await page.goto(url, { waitUntil: "load", timeout: 30000 }).catch(() => undefined)
+  }
+
   async function close(value?: { browser: Browser }) {
     if (!value) return
     await value.browser.close().catch(() => undefined)
@@ -85,7 +92,7 @@ export namespace ChatWeb {
       storageState: await storage(input).catch(() => undefined),
     })
     const page = await context.newPage()
-    await page.goto(urls[input.ai], { waitUntil: "domcontentloaded", timeout: 30000 })
+    await visit(page, urls[input.ai])
 
     login.set(key(input), { browser, context, ai: input.ai, kind: input.kind })
     return { session: key(input) }
@@ -154,7 +161,7 @@ export namespace ChatWeb {
         ? `https://chatgpt.com/c/${input.chatID}`
         : `https://claude.ai/chat/${input.chatID}`
       : urls[input.ai]
-    await page.goto(target, { waitUntil: "domcontentloaded", timeout: 45000 })
+    await visit(page, target)
     await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => undefined)
     await page.waitForTimeout(1500)
 
