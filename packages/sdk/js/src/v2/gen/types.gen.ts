@@ -3315,6 +3315,10 @@ export type SessionPromptData = {
     format?: OutputFormat
     system?: string
     variant?: string
+    webchat?: {
+      enabled?: boolean
+      browser?: "chrome" | "edge"
+    }
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {
@@ -3515,6 +3519,10 @@ export type SessionPromptAsyncData = {
     format?: OutputFormat
     system?: string
     variant?: string
+    webchat?: {
+      enabled?: boolean
+      browser?: "chrome" | "edge"
+    }
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {
