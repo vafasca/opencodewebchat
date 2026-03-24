@@ -1056,6 +1056,101 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   })
 
   const variants = createMemo(() => ["default", ...local.model.variant.list()])
+  const ais = ["chatgpt", "claude"] as const
+  const browsers = ["edge", "chrome"] as const
+  const [chatweb, setChatweb] = persisted(
+    Persist.workspace(sdk.directory, "chatweb", ["chatweb.v1"]),
+    createStore<{
+      ai: (typeof ais)[number]
+      browser: (typeof browsers)[number]
+    }>({
+      ai: "chatgpt",
+      browser: "edge",
+    }),
+  )
+  const [web, setWeb] = createStore({
+    has: false,
+    open: false,
+    load: false,
+  })
+  const webkey = createMemo(() => `${chatweb.ai}-${chatweb.browser}`)
+  const weburl = (input: string) => new URL(input, sdk.url).toString()
+  const webfetch = async (url: string, init?: RequestInit) => {
+    const res = await fetch(weburl(url), {
+      ...init,
+      headers: {
+        "content-type": "application/json",
+        ...init?.headers,
+      },
+    })
+    if (!res.ok) throw new Error(await res.text().catch(() => "request failed"))
+    return res.json().catch(() => ({}))
+  }
+  const webstatus = async () => {
+    const data = await webfetch("/chatweb/status")
+    const item = data.status?.[webkey()]
+    setWeb("has", !!item?.hasStorage)
+    setWeb("open", !!item?.loginOpen)
+  }
+  const webmode = async (has: boolean) => {
+    if (!params.id) return
+    await webfetch("/chatweb/mode", {
+      method: "POST",
+      body: JSON.stringify({
+        sessionID: params.id,
+        enabled: has,
+        ai: chatweb.ai,
+        browser: chatweb.browser,
+      }),
+    })
+  }
+  const weblogin = async () => {
+    setWeb("load", true)
+    await webfetch("/chatweb/login", {
+      method: "POST",
+      body: JSON.stringify({
+        ai: chatweb.ai,
+        browser: chatweb.browser,
+      }),
+    })
+    await webstatus()
+    setWeb("load", false)
+  }
+  const websave = async () => {
+    setWeb("load", true)
+    await webfetch("/chatweb/login", {
+      method: "PUT",
+      body: JSON.stringify({
+        ai: chatweb.ai,
+        browser: chatweb.browser,
+      }),
+    })
+    await webstatus()
+    await webmode(true)
+    setWeb("load", false)
+  }
+  const webtap = async () => {
+    if (web.load) return
+    await (web.open ? websave() : weblogin()).catch((err) => {
+      console.error("chatweb login failed", err)
+      setWeb("load", false)
+    })
+  }
+  createEffect(() => {
+    webkey()
+    void webstatus().catch(() => undefined)
+  })
+  createEffect(() => {
+    const id = params.id
+    if (!id) return
+    void webmode(web.has).catch(() => undefined)
+  })
+  const webtext = createMemo(() => {
+    if (web.load) return language.t("prompt.chatweb.loading")
+    if (web.open) return language.t("prompt.chatweb.save")
+    if (web.has) return language.t("prompt.chatweb.logged")
+    return language.t("prompt.chatweb.login")
+  })
   const accepting = createMemo(() => {
     const id = params.id
     if (!id) return permission.isAutoAcceptingDirectory(sdk.directory)
@@ -1566,6 +1661,45 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                       variant="ghost"
                     />
                   </TooltipKeybind>
+                </div>
+                <div data-component="prompt-chatweb-ai">
+                  <Select
+                    size="normal"
+                    options={ais}
+                    current={chatweb.ai}
+                    label={(x) => x}
+                    onSelect={(x) => setChatweb("ai", x)}
+                    class="capitalize max-w-[160px] text-text-base"
+                    valueClass="truncate text-13-regular text-text-base"
+                    triggerStyle={control()}
+                    variant="ghost"
+                  />
+                </div>
+                <div data-component="prompt-chatweb-browser">
+                  <Select
+                    size="normal"
+                    options={browsers}
+                    current={chatweb.browser}
+                    label={(x) => x}
+                    onSelect={(x) => setChatweb("browser", x)}
+                    class="capitalize max-w-[140px] text-text-base"
+                    valueClass="truncate text-13-regular text-text-base"
+                    triggerStyle={control()}
+                    variant="ghost"
+                  />
+                </div>
+                <div data-component="prompt-chatweb-login">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="normal"
+                    class="min-w-0 max-w-[160px] text-13-regular text-text-base"
+                    style={control()}
+                    onClick={() => void webtap()}
+                    disabled={web.load}
+                  >
+                    <span class="truncate">{webtext()}</span>
+                  </Button>
                 </div>
                 <TooltipKeybind
                   placement="top"

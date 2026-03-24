@@ -277,6 +277,10 @@ export const dict = {
   "prompt.attachment.remove": "Eliminar adjunto",
   "prompt.action.send": "Enviar",
   "prompt.action.stop": "Detener",
+  "prompt.chatweb.login": "Loguear",
+  "prompt.chatweb.logged": "Logueado",
+  "prompt.chatweb.save": "Guardar login",
+  "prompt.chatweb.loading": "Cargando...",
 
   "prompt.toast.pasteUnsupported.title": "Adjunto no compatible",
   "prompt.toast.pasteUnsupported.description": "Solo se pueden adjuntar imágenes, PDFs o archivos de texto aquí.",

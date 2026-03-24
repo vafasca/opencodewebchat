@@ -280,6 +280,10 @@ export const dict = {
   "prompt.attachment.remove": "Remove attachment",
   "prompt.action.send": "Send",
   "prompt.action.stop": "Stop",
+  "prompt.chatweb.login": "Login",
+  "prompt.chatweb.logged": "Logged in",
+  "prompt.chatweb.save": "Save login",
+  "prompt.chatweb.loading": "Loading...",
 
   "prompt.toast.pasteUnsupported.title": "Unsupported attachment",
   "prompt.toast.pasteUnsupported.description": "Only images, PDFs, or text files can be attached here.",
