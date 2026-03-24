@@ -15,6 +15,7 @@ import { SessionCompaction } from "./compaction"
 import { Permission } from "@/permission"
 import { Question } from "@/question"
 import { PartID } from "./schema"
+import { ChatWeb } from "@/chatweb/service"
 import type { SessionID, MessageID } from "./schema"
 
 export namespace SessionProcessor {
@@ -48,6 +49,39 @@ export namespace SessionProcessor {
         needsCompaction = false
         const shouldBreak = (await Config.get()).experimental?.continue_loop_on_deny !== true
         while (true) {
+          const web = ChatWeb.getMode(input.sessionID)
+          if (web) {
+            const text = streamInput.messages
+              .filter((item) => item.role === "user")
+              .flatMap((item) => (Array.isArray(item.content) ? item.content : [{ type: "text", text: item.content }]))
+              .filter((item): item is { type: "text"; text: string } => item.type === "text")
+              .map((item) => item.text)
+              .join("\n")
+            const reply = await ChatWeb.prompt({ sessionID: input.sessionID, text })
+            const output = reply?.text ?? ""
+            await SessionStatus.set(input.sessionID, { type: "busy" })
+            const part = await Session.updatePart({
+              id: PartID.ascending(),
+              messageID: input.assistantMessage.id,
+              sessionID: input.assistantMessage.sessionID,
+              type: "text",
+              text: output,
+              time: { start: Date.now(), end: Date.now() },
+            })
+            await Plugin.trigger(
+              "experimental.text.complete",
+              {
+                sessionID: input.sessionID,
+                messageID: input.assistantMessage.id,
+                partID: part.id,
+              },
+              { text: output },
+            )
+            input.assistantMessage.finish = "stop"
+            input.assistantMessage.time.completed = Date.now()
+            await Session.updateMessage(input.assistantMessage)
+            return "stop"
+          }
           try {
             let currentText: MessageV2.TextPart | undefined
             let reasoningMap: Record<string, MessageV2.ReasoningPart> = {}

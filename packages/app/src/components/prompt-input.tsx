@@ -56,6 +56,8 @@ import { PromptImageAttachments } from "./prompt-input/image-attachments"
 import { PromptDragOverlay } from "./prompt-input/drag-overlay"
 import { promptPlaceholder } from "./prompt-input/placeholder"
 import { ImagePreview } from "@opencode-ai/ui/image-preview"
+import { showToast } from "@opencode-ai/ui/toast"
+import { formatServerError } from "@/utils/server-errors"
 
 interface PromptInputProps {
   class?: string
@@ -1056,6 +1058,163 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   })
 
   const variants = createMemo(() => ["default", ...local.model.variant.list()])
+  const ais = ["chatgpt", "claude"] as const
+  const browsers = ["edge", "chrome"] as const
+  const [chatweb, setChatweb] = persisted(
+    Persist.workspace(sdk.directory, "chatweb", ["chatweb.v1"]),
+    createStore<{
+      ai: (typeof ais)[number]
+      browser: (typeof browsers)[number]
+    }>({
+      ai: "chatgpt",
+      browser: "edge",
+    }),
+  )
+  const [web, setWeb] = createStore({
+    has: false,
+    open: false,
+    load: false,
+  })
+  const webkey = createMemo(() => `${chatweb.ai}-${chatweb.browser}`)
+  const weburl = (input: string) => new URL(input, sdk.url).toString()
+  const webfetch = async (url: string, init?: RequestInit, timeout = 15000) => {
+    const abort = new AbortController()
+    const timer = setTimeout(() => abort.abort(), timeout)
+    try {
+      const res = await fetch(weburl(url), {
+        ...init,
+        signal: abort.signal,
+        headers: {
+          "content-type": "application/json",
+          ...init?.headers,
+        },
+      })
+      if (!res.ok) {
+        const text = await res.text().catch(() => "")
+        const body = (() => {
+          if (!text) return undefined
+          try {
+            return JSON.parse(text)
+          } catch {
+            return text
+          }
+        })()
+        throw new Error(
+          formatServerError(
+            (body ?? text) || `HTTP ${res.status}`,
+            (key, vars) => language.t(key as Parameters<typeof language.t>[0], vars as never),
+            language.t("common.requestFailed"),
+          ),
+        )
+      }
+      return res.json().catch(() => ({}))
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  const webstatus = async () => {
+    const data = await webfetch("/chatweb/status")
+    const item = data.status?.[webkey()]
+    setWeb("has", !!item?.hasStorage)
+    setWeb("open", !!item?.loginOpen)
+  }
+  const webmode = async (has: boolean) => {
+    if (!params.id) return
+    await webfetch("/chatweb/mode", {
+      method: "POST",
+      body: JSON.stringify({
+        sessionID: params.id,
+        enabled: has,
+        ai: chatweb.ai,
+        browser: chatweb.browser,
+      }),
+    })
+  }
+  const weblogin = async () => {
+    setWeb("load", true)
+    try {
+      await webfetch("/chatweb/login", {
+        method: "POST",
+        body: JSON.stringify({
+          ai: chatweb.ai,
+          browser: chatweb.browser,
+        }),
+      }, 180000)
+      await webstatus()
+    } finally {
+      setWeb("load", false)
+    }
+  }
+  const websave = async () => {
+    setWeb("load", true)
+    try {
+      await webfetch("/chatweb/login", {
+        method: "PUT",
+        body: JSON.stringify({
+          ai: chatweb.ai,
+          browser: chatweb.browser,
+        }),
+      }, 60000)
+      await webstatus()
+      await webmode(true)
+    } finally {
+      setWeb("load", false)
+    }
+  }
+  const webopen = async () => {
+    if (web.load) return
+    await weblogin().catch((err) => {
+      const msg = formatServerError(
+        err,
+        (key, vars) => language.t(key as Parameters<typeof language.t>[0], vars as never),
+        language.t("common.requestFailed"),
+      )
+      showToast({
+        title: language.t("prompt.chatweb.toast.loginFailed.title"),
+        description: msg,
+      })
+      console.error("chatweb login failed", err)
+      setWeb("load", false)
+    })
+  }
+  const webconfirm = async () => {
+    if (web.load) return
+    await websave().catch((err) => {
+      const msg = formatServerError(
+        err,
+        (key, vars) => language.t(key as Parameters<typeof language.t>[0], vars as never),
+        language.t("common.requestFailed"),
+      )
+      showToast({
+        title: language.t("prompt.chatweb.toast.confirmFailed.title"),
+        description: msg,
+      })
+      console.error("chatweb confirm failed", err)
+      setWeb("load", false)
+    })
+  }
+  createEffect(() => {
+    webkey()
+    void webstatus().catch(() => undefined)
+  })
+  createEffect(() => {
+    if (!web.open) return
+    const timer = setInterval(() => {
+      void webstatus().catch(() => undefined)
+    }, 2000)
+    onCleanup(() => clearInterval(timer))
+  })
+  createEffect(() => {
+    const id = params.id
+    if (!id) return
+    void webmode(web.has).catch(() => undefined)
+  })
+  const webtext = createMemo(() => {
+    if (web.load) return language.t("prompt.chatweb.loading")
+    return language.t("prompt.chatweb.login")
+  })
+  const webconfirmtext = createMemo(() => (web.load ? language.t("prompt.chatweb.loading") : language.t("prompt.chatweb.confirm")))
+  const webstate = createMemo(() => (web.has ? language.t("prompt.chatweb.ready") : language.t("prompt.chatweb.pending")))
   const accepting = createMemo(() => {
     const id = params.id
     if (!id) return permission.isAutoAcceptingDirectory(sdk.directory)
@@ -1566,6 +1725,74 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                       variant="ghost"
                     />
                   </TooltipKeybind>
+                </div>
+                <div data-component="prompt-chatweb-ai">
+                  <Select
+                    size="normal"
+                    options={ais}
+                    current={chatweb.ai}
+                    label={(x) => x}
+                    onSelect={(x) => setChatweb("ai", x)}
+                    class="capitalize max-w-[160px] text-text-base"
+                    valueClass="truncate text-13-regular text-text-base"
+                    triggerStyle={control()}
+                    variant="ghost"
+                  />
+                </div>
+                <div data-component="prompt-chatweb-browser">
+                  <Select
+                    size="normal"
+                    options={browsers}
+                    current={chatweb.browser}
+                    label={(x) => x}
+                    onSelect={(x) => setChatweb("browser", x)}
+                    class="capitalize max-w-[140px] text-text-base"
+                    valueClass="truncate text-13-regular text-text-base"
+                    triggerStyle={control()}
+                    variant="ghost"
+                  />
+                </div>
+                <div data-component="prompt-chatweb-login">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="normal"
+                    class="min-w-0 max-w-[160px] text-13-regular text-text-base"
+                    style={control()}
+                    onClick={() => void webopen()}
+                    disabled={web.load}
+                  >
+                    <span class="truncate">{webtext()}</span>
+                  </Button>
+                </div>
+                <div data-component="prompt-chatweb-confirm">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="normal"
+                    class="min-w-0 max-w-[160px] text-13-regular text-text-base"
+                    style={control()}
+                    onClick={() => void webconfirm()}
+                    disabled={web.load}
+                  >
+                    <span class="truncate">{webconfirmtext()}</span>
+                  </Button>
+                </div>
+                <div data-component="prompt-chatweb-state">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="normal"
+                    classList={{
+                      "min-w-0 max-w-[170px] text-13-regular": true,
+                      "text-green-400": web.has,
+                      "text-text-base": !web.has,
+                    }}
+                    style={control()}
+                    disabled
+                  >
+                    <span class="truncate">{webstate()}</span>
+                  </Button>
                 </div>
                 <TooltipKeybind
                   placement="top"
