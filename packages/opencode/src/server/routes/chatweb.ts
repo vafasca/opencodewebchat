@@ -22,8 +22,18 @@ export function ChatWebRoutes() {
       async (c) => {
         const body = c.req.valid("json")
         const parsed = ChatWeb.parse(body)
-        const data = await ChatWeb.startLogin(parsed)
-        return c.json({ success: true, ...data })
+        try {
+          const data = await ChatWeb.startLogin(parsed)
+          return c.json({ success: true, ...data })
+        } catch (error) {
+          return c.json(
+            {
+              success: false,
+              error: error instanceof Error ? error.message : String(error),
+            },
+            500,
+          )
+        }
       },
     )
     .put(
@@ -38,8 +48,18 @@ export function ChatWebRoutes() {
       async (c) => {
         const body = c.req.valid("json")
         const parsed = ChatWeb.parse(body)
-        await ChatWeb.confirmLogin(parsed)
-        return c.json({ success: true })
+        try {
+          await ChatWeb.confirmLogin(parsed)
+          return c.json({ success: true })
+        } catch (error) {
+          return c.json(
+            {
+              success: false,
+              error: error instanceof Error ? error.message : String(error),
+            },
+            500,
+          )
+        }
       },
     )
     .delete(

@@ -18,11 +18,14 @@ export namespace ChatWeb {
   const login = new Map<string, Login>()
   const chat = new Map<string, Chat>()
   const mode = new Map<string, { ai: Ai; kind: BrowserKind }>()
+  const fail = new Map<string, string>()
 
   const urls: Record<Ai, string> = {
     chatgpt: "https://chatgpt.com/",
     claude: "https://claude.ai/",
   }
+  const agent =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
   function key(input: { ai: Ai; kind: BrowserKind }) {
     return `${input.ai}-${input.kind}`
@@ -93,18 +96,31 @@ export namespace ChatWeb {
   export async function startLogin(input: { ai: Ai; kind: BrowserKind }) {
     await close(login.get(key(input)))
     login.delete(key(input))
-
-    const browser = await launch(input.kind)
-    const context = await browser.newContext({
-      viewport: null,
-      storageState: await state(input),
-    })
-    const page = await context.newPage()
-    await visit(page, urls[input.ai])
-    await page.bringToFront().catch(() => undefined)
-
-    login.set(key(input), { browser, context, ai: input.ai, kind: input.kind })
-    return { session: key(input) }
+    let browser: Browser | undefined
+    let step = "launch"
+    try {
+      browser = await launch(input.kind)
+      step = "context"
+      const context = await browser.newContext({
+        viewport: null,
+        userAgent: agent,
+        storageState: await state(input),
+      })
+      step = "page"
+      const page = await context.newPage()
+      step = "navigate"
+      await visit(page, urls[input.ai])
+      await page.bringToFront().catch(() => undefined)
+      if (page.url() === "about:blank") throw new Error(`navigation stayed at about:blank for ${urls[input.ai]}`)
+      login.set(key(input), { browser, context, ai: input.ai, kind: input.kind })
+      fail.delete(key(input))
+      return { session: key(input), url: page.url() }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      fail.set(key(input), `${step}: ${msg}`)
+      await close(browser ? { browser } : undefined)
+      throw new Error(`chatweb login failed at ${step}: ${msg}`)
+    }
   }
 
   export async function confirmLogin(input: { ai: Ai; kind: BrowserKind }) {
@@ -132,10 +148,11 @@ export namespace ChatWeb {
         acc[`${item.ai}-${item.kind}`] = {
           hasStorage: Bun.file(item.file).size > 0,
           loginOpen: alive(login.get(`${item.ai}-${item.kind}`)),
+          lastError: fail.get(`${item.ai}-${item.kind}`),
         }
         return acc
       },
-      {} as Record<string, { hasStorage: boolean; loginOpen: boolean }>,
+      {} as Record<string, { hasStorage: boolean; loginOpen: boolean; lastError?: string }>,
     )
   }
 
@@ -162,6 +179,7 @@ export namespace ChatWeb {
     const browser = await launch(input.kind)
     const context = await browser.newContext({
       viewport: null,
+      userAgent: agent,
       storageState: await state({ ai: input.ai, kind: input.kind }),
     })
     const page = await context.newPage()

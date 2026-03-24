@@ -1101,7 +1101,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         })()
         throw new Error(
           formatServerError(
-            body ?? text,
+            (body ?? text) || `HTTP ${res.status}`,
             (key, vars) => language.t(key as Parameters<typeof language.t>[0], vars as never),
             language.t("common.requestFailed"),
           ),
