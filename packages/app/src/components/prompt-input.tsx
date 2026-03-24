@@ -1142,10 +1142,17 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       setWeb("load", false)
     }
   }
-  const webtap = async () => {
+  const webopen = async () => {
     if (web.load) return
-    await (web.open ? websave() : weblogin()).catch((err) => {
+    await weblogin().catch((err) => {
       console.error("chatweb login failed", err)
+      setWeb("load", false)
+    })
+  }
+  const webconfirm = async () => {
+    if (web.load) return
+    await websave().catch((err) => {
+      console.error("chatweb confirm failed", err)
       setWeb("load", false)
     })
   }
@@ -1154,16 +1161,23 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     void webstatus().catch(() => undefined)
   })
   createEffect(() => {
+    if (!web.open) return
+    const timer = setInterval(() => {
+      void webstatus().catch(() => undefined)
+    }, 2000)
+    onCleanup(() => clearInterval(timer))
+  })
+  createEffect(() => {
     const id = params.id
     if (!id) return
     void webmode(web.has).catch(() => undefined)
   })
   const webtext = createMemo(() => {
     if (web.load) return language.t("prompt.chatweb.loading")
-    if (web.open) return language.t("prompt.chatweb.save")
-    if (web.has) return language.t("prompt.chatweb.logged")
     return language.t("prompt.chatweb.login")
   })
+  const webconfirmtext = createMemo(() => (web.load ? language.t("prompt.chatweb.loading") : language.t("prompt.chatweb.confirm")))
+  const webstate = createMemo(() => (web.has ? language.t("prompt.chatweb.ready") : language.t("prompt.chatweb.pending")))
   const accepting = createMemo(() => {
     const id = params.id
     if (!id) return permission.isAutoAcceptingDirectory(sdk.directory)
@@ -1708,10 +1722,39 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     size="normal"
                     class="min-w-0 max-w-[160px] text-13-regular text-text-base"
                     style={control()}
-                    onClick={() => void webtap()}
+                    onClick={() => void webopen()}
                     disabled={web.load}
                   >
                     <span class="truncate">{webtext()}</span>
+                  </Button>
+                </div>
+                <div data-component="prompt-chatweb-confirm">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="normal"
+                    class="min-w-0 max-w-[160px] text-13-regular text-text-base"
+                    style={control()}
+                    onClick={() => void webconfirm()}
+                    disabled={web.load || !web.open}
+                  >
+                    <span class="truncate">{webconfirmtext()}</span>
+                  </Button>
+                </div>
+                <div data-component="prompt-chatweb-state">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="normal"
+                    classList={{
+                      "min-w-0 max-w-[170px] text-13-regular": true,
+                      "text-green-400": web.has,
+                      "text-text-base": !web.has,
+                    }}
+                    style={control()}
+                    disabled
+                  >
+                    <span class="truncate">{webstate()}</span>
                   </Button>
                 </div>
                 <TooltipKeybind

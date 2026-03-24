@@ -280,6 +280,9 @@ export const dict = {
   "prompt.chatweb.login": "Loguear",
   "prompt.chatweb.logged": "Logueado",
   "prompt.chatweb.save": "Guardar login",
+  "prompt.chatweb.confirm": "Confirmar login",
+  "prompt.chatweb.ready": "Seguro ✓",
+  "prompt.chatweb.pending": "Necesita login",
   "prompt.chatweb.loading": "Cargando...",
 
   "prompt.toast.pasteUnsupported.title": "Adjunto no compatible",

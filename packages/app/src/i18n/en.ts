@@ -283,6 +283,9 @@ export const dict = {
   "prompt.chatweb.login": "Login",
   "prompt.chatweb.logged": "Logged in",
   "prompt.chatweb.save": "Save login",
+  "prompt.chatweb.confirm": "Confirm login",
+  "prompt.chatweb.ready": "Secure ✓",
+  "prompt.chatweb.pending": "Needs login",
   "prompt.chatweb.loading": "Loading...",
 
   "prompt.toast.pasteUnsupported.title": "Unsupported attachment",
