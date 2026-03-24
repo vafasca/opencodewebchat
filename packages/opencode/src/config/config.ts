@@ -1093,7 +1093,7 @@ export namespace Config {
           response_selector: z.string().optional().describe("CSS selector for assistant response messages"),
           timeout: z.number().int().positive().optional().describe("Timeout in milliseconds for webchat automation"),
           settle: z.number().int().positive().optional().describe("Stabilization wait in milliseconds for response"),
-          headless: z.boolean().optional().describe("Run browser headless (default true in CI)"),
+          headless: z.boolean().optional().describe("Run browser headless (default false)"),
         })
         .optional()
         .describe("Browser webchat mode configuration"),

@@ -1,5 +1,4 @@
 import { Log } from "@/util/log"
-import { Process } from "@/util/process"
 import type { Page } from "playwright"
 
 export namespace Webchat {
@@ -52,7 +51,7 @@ export namespace Webchat {
       url,
       inputs,
       outputs,
-      headless: input.headless ?? Process.isCI,
+      headless: input.headless ?? false,
     })
 
     if (!input.prompt.trim()) {
@@ -71,7 +70,7 @@ export namespace Webchat {
     const browser = await playwright.chromium
       .launch({
         channel,
-        headless: input.headless ?? Process.isCI,
+        headless: input.headless ?? false,
       })
       .catch((err) => {
         const txt = err instanceof Error ? err.message : String(err)
