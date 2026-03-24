@@ -65,12 +65,22 @@ export namespace ChatWeb {
   }
 
   function launch(input: BrowserKind) {
+    const args = ["--start-maximized", "--disable-blink-features=AutomationControlled"]
+    if (input === "edge") {
+      return chromium.launch({
+        channel: channel(input),
+        headless: false,
+        timeout: 120000,
+        ignoreDefaultArgs: ["--no-startup-window", "--remote-debugging-pipe"],
+        args: [...args, "--remote-debugging-port=0"],
+      })
+    }
     return chromium.launch({
       channel: channel(input),
       headless: false,
-      timeout: 30000,
+      timeout: 120000,
       ignoreDefaultArgs: ["--no-startup-window"],
-      args: ["--start-maximized", "--disable-blink-features=AutomationControlled"],
+      args,
     })
   }
 
