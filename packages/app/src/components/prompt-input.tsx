@@ -56,6 +56,8 @@ import { PromptImageAttachments } from "./prompt-input/image-attachments"
 import { PromptDragOverlay } from "./prompt-input/drag-overlay"
 import { promptPlaceholder } from "./prompt-input/placeholder"
 import { ImagePreview } from "@opencode-ai/ui/image-preview"
+import { showToast } from "@opencode-ai/ui/toast"
+import { formatServerError } from "@/utils/server-errors"
 
 interface PromptInputProps {
   class?: string
@@ -1087,7 +1089,24 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           ...init?.headers,
         },
       })
-      if (!res.ok) throw new Error(await res.text().catch(() => "request failed"))
+      if (!res.ok) {
+        const text = await res.text().catch(() => "")
+        const body = (() => {
+          if (!text) return undefined
+          try {
+            return JSON.parse(text)
+          } catch {
+            return text
+          }
+        })()
+        throw new Error(
+          formatServerError(
+            body ?? text,
+            (key, vars) => language.t(key as Parameters<typeof language.t>[0], vars as never),
+            language.t("common.requestFailed"),
+          ),
+        )
+      }
       return res.json().catch(() => ({}))
     } finally {
       clearTimeout(timer)
@@ -1145,6 +1164,15 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const webopen = async () => {
     if (web.load) return
     await weblogin().catch((err) => {
+      const msg = formatServerError(
+        err,
+        (key, vars) => language.t(key as Parameters<typeof language.t>[0], vars as never),
+        language.t("common.requestFailed"),
+      )
+      showToast({
+        title: language.t("prompt.chatweb.toast.loginFailed.title"),
+        description: msg,
+      })
       console.error("chatweb login failed", err)
       setWeb("load", false)
     })
@@ -1152,6 +1180,15 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const webconfirm = async () => {
     if (web.load) return
     await websave().catch((err) => {
+      const msg = formatServerError(
+        err,
+        (key, vars) => language.t(key as Parameters<typeof language.t>[0], vars as never),
+        language.t("common.requestFailed"),
+      )
+      showToast({
+        title: language.t("prompt.chatweb.toast.confirmFailed.title"),
+        description: msg,
+      })
       console.error("chatweb confirm failed", err)
       setWeb("load", false)
     })

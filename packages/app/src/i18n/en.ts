@@ -287,6 +287,8 @@ export const dict = {
   "prompt.chatweb.ready": "Secure ✓",
   "prompt.chatweb.pending": "Needs login",
   "prompt.chatweb.loading": "Loading...",
+  "prompt.chatweb.toast.loginFailed.title": "ChatWeb login failed",
+  "prompt.chatweb.toast.confirmFailed.title": "ChatWeb confirm failed",
 
   "prompt.toast.pasteUnsupported.title": "Unsupported attachment",
   "prompt.toast.pasteUnsupported.description": "Only images, PDFs, or text files can be attached here.",
