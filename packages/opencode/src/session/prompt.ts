@@ -290,7 +290,7 @@ export namespace SessionPrompt {
     })
     return {
       info: assistant,
-      parts: await Session.parts(assistant.id),
+      parts: await MessageV2.parts(assistant.id),
     }
   }
 

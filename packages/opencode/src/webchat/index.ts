@@ -1,5 +1,6 @@
 import { Log } from "@/util/log"
 import type { Page } from "playwright"
+import { existsSync } from "fs"
 
 export namespace Webchat {
   const log = Log.create({ service: "webchat" })
@@ -20,6 +21,17 @@ export namespace Webchat {
       input: ["div[contenteditable='true']", "textarea"],
       response: ["div[data-is-streaming]", "div.font-claude-message", "div[data-testid='message-content']"],
     },
+  } as const
+
+  const path = {
+    chrome: [
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+    ],
+    edge: [
+      "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+      "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    ],
   } as const
 
   export type Input = {
@@ -87,7 +99,21 @@ export namespace Webchat {
             log.error("webchat.run.launch_fallback_failed", { error: retryTxt })
             return undefined
           })
-        return retry
+        if (retry) return retry
+        const bin = pickPath(input.browser)
+        if (!bin) return undefined
+        log.warn("webchat.run.launch_executable_path", { bin })
+        const last = await playwright.chromium
+          .launch({
+            executablePath: bin,
+            headless: input.headless ?? false,
+          })
+          .catch((lastErr) => {
+            const lastTxt = lastErr instanceof Error ? lastErr.message : String(lastErr)
+            log.error("webchat.run.launch_executable_failed", { error: lastTxt, bin })
+            return undefined
+          })
+        return last
       })
     if (!browser) {
       return [
@@ -173,6 +199,12 @@ export namespace Webchat {
         .then(() => true)
         .catch(() => false)
       if (ok) return item
+    }
+  }
+
+  const pickPath = (input: "chrome" | "edge") => {
+    for (const item of path[input]) {
+      if (existsSync(item)) return item
     }
   }
 }
