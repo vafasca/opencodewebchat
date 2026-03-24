@@ -231,6 +231,23 @@ export namespace SessionPrompt {
       response: cfg.webchat?.response_selector,
       settle: cfg.webchat?.settle,
       headless: cfg.webchat?.headless,
+    }).catch((err) => {
+      const txt = err instanceof Error ? err.message : String(err)
+      log.error("prompt.webchat.failed", {
+        sessionID: input.input.sessionID,
+        error: txt,
+      })
+      return [
+        "Webchat falló al ejecutar Playwright.",
+        "Posibles causas:",
+        "- Playwright no está instalado",
+        "- Navegador channel no disponible (chrome/msedge)",
+        "- No hay sesión iniciada en el chat objetivo",
+        "",
+        `Detalle: ${txt}`,
+        "",
+        "Prueba: bunx playwright install",
+      ].join("\n")
     })
     const model = input.message.info.model
     const assistant = (await Session.updateMessage({

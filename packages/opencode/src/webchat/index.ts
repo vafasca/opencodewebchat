@@ -60,11 +60,27 @@ export namespace Webchat {
       return ""
     }
 
-    const playwright = await import("playwright")
-    const browser = await playwright.chromium.launch({
-      channel,
-      headless: input.headless ?? Process.isCI,
+    const playwright = await import("playwright").catch((err) => {
+      const txt = err instanceof Error ? err.message : String(err)
+      log.error("webchat.run.playwright_import_failed", { error: txt })
+      return undefined
     })
+    if (!playwright) {
+      return "No se pudo cargar Playwright. Instala dependencias y ejecuta: bunx playwright install"
+    }
+    const browser = await playwright.chromium
+      .launch({
+        channel,
+        headless: input.headless ?? Process.isCI,
+      })
+      .catch((err) => {
+        const txt = err instanceof Error ? err.message : String(err)
+        log.error("webchat.run.launch_failed", { error: txt, channel })
+        return undefined
+      })
+    if (!browser) {
+      return "No se pudo abrir el navegador con Playwright. Revisa instalación y channel (chrome/msedge)."
+    }
     const ctx = await browser.newContext()
     const page = await ctx.newPage()
     await page.goto(url, {
