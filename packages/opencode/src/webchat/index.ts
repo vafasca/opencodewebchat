@@ -1,6 +1,7 @@
 import { Log } from "@/util/log"
 import type { Page } from "playwright"
 import { existsSync } from "fs"
+import { fileURLToPath } from "url"
 
 export namespace Webchat {
   const log = Log.create({ service: "webchat" })
@@ -116,10 +117,22 @@ export namespace Webchat {
         return last
       })
     if (!browser) {
+      const node = await nodeRun({
+        browser: input.browser,
+        target: mode,
+        prompt: input.prompt,
+        timeout,
+        settle,
+        url,
+        input: input.input,
+        response: input.response,
+        headless: input.headless ?? false,
+      })
+      if (node?.ok && node.text) return node.text
       return [
         "No se pudo abrir el navegador con Playwright.",
-        "Se intentó channel (chrome/msedge) y fallback chromium interno.",
-        "Revisa instalación de navegador y permisos de ventana.",
+        "Se intentó channel (chrome/msedge), fallback chromium y driver Node.",
+        `Detalle: ${node?.error ?? "sin detalle"}`,
       ].join(" ")
     }
     const ctx = await browser.newContext()
@@ -206,5 +219,46 @@ export namespace Webchat {
     for (const item of path[input]) {
       if (existsSync(item)) return item
     }
+  }
+
+  const nodeRun = async (input: {
+    browser: "chrome" | "edge"
+    target: "chatgpt" | "claude"
+    prompt: string
+    timeout: number
+    settle: number
+    url: string
+    input?: string
+    response?: string
+    headless: boolean
+  }) => {
+    const file = fileURLToPath(new URL("./driver.cjs", import.meta.url))
+    log.warn("webchat.run.node_driver.start", {
+      file,
+      browser: input.browser,
+      target: input.target,
+    })
+    const proc = Bun.spawn(["node", file], {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    proc.stdin.write(JSON.stringify(input))
+    proc.stdin.end()
+    const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
+    if (code !== 0) {
+      log.error("webchat.run.node_driver.exit", { code, err })
+      return
+    }
+    if (err.trim()) log.warn("webchat.run.node_driver.stderr", { err })
+    const data = await Promise.resolve(JSON.parse(out || "{}"))
+      .then((x) => x as { ok?: boolean; text?: string; error?: string })
+      .catch((parseErr) => {
+        const txt = parseErr instanceof Error ? parseErr.message : String(parseErr)
+        log.error("webchat.run.node_driver.parse_failed", { txt, out })
+        return { ok: false, error: txt }
+      })
+    log.info("webchat.run.node_driver.done", { ok: data.ok === true, error: data.error })
+    return data
   }
 }
