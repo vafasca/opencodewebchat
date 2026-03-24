@@ -32,8 +32,12 @@ export type FollowupDraft = {
   prompt: Prompt
   context: (ContextItem & { key: string })[]
   agent: string
-  model: { providerID: string; modelID: string }
+  model?: { providerID: string; modelID: string }
   variant?: string
+  webchat?: {
+    enabled: boolean
+    browser: "chrome" | "edge"
+  }
 }
 
 type FollowupSendInput = {
@@ -51,6 +55,11 @@ const draftText = (prompt: Prompt) => prompt.map((part) => ("content" in part ? 
 const draftImages = (prompt: Prompt) => prompt.filter((part): part is ImageAttachmentPart => part.type === "image")
 
 export async function sendFollowupDraft(input: FollowupSendInput) {
+  console.info("[webchat] sendFollowupDraft", {
+    sessionID: input.draft.sessionID,
+    enabled: input.draft.webchat?.enabled === true,
+    browser: input.draft.webchat?.browser,
+  })
   const text = draftText(input.draft.prompt)
   const images = draftImages(input.draft.prompt)
   const [, setStore] = input.globalSync.child(input.draft.sessionDirectory)
@@ -86,7 +95,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
         command: cmd,
         arguments: tail.join(" "),
         agent: input.draft.agent,
-        model: `${input.draft.model.providerID}/${input.draft.model.modelID}`,
+        model: input.draft.model ? `${input.draft.model.providerID}/${input.draft.model.modelID}` : "webchat/browser",
         variant: input.draft.variant,
         parts: images.map((attachment) => ({
           id: Identifier.ascending("part"),
@@ -120,7 +129,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
     role: "user",
     time: { created: Date.now() },
     agent: input.draft.agent,
-    model: input.draft.model,
+    model: input.draft.model ?? { providerID: "webchat", modelID: "browser" },
     variant: input.draft.variant,
   }
 
@@ -149,14 +158,16 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       return false
     }
 
-    await input.client.session.promptAsync({
+    const body = {
       sessionID: input.draft.sessionID,
       agent: input.draft.agent,
       model: input.draft.model,
       messageID,
       parts: requestParts,
       variant: input.draft.variant,
-    })
+      webchat: input.draft.webchat,
+    } as any
+    await input.client.session.promptAsync(body)
     return true
   } catch (err) {
     setIdle()
@@ -185,6 +196,8 @@ type PromptSubmitInput = {
   onQueue?: (draft: FollowupDraft) => void
   onAbort?: () => void
   onSubmit?: () => void
+  webchatEnabled?: Accessor<boolean>
+  webchatBrowser?: Accessor<"chrome" | "edge">
 }
 
 type CommentItem = {
@@ -297,7 +310,15 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     const currentModel = local.model.current()
     const currentAgent = local.agent.current()
     const variant = local.model.variant.current()
-    if (!currentModel || !currentAgent) {
+    const webchatEnabled = input.webchatEnabled?.() === true
+    console.info("[webchat] handleSubmit", {
+      webchatEnabled,
+      browser: input.webchatBrowser?.(),
+      mode,
+      hasModel: !!currentModel,
+      hasAgent: !!currentAgent,
+    })
+    if ((!currentModel && !webchatEnabled) || !currentAgent) {
       showToast({
         title: language.t("prompt.toast.modelAgentRequired.title"),
         description: language.t("prompt.toast.modelAgentRequired.description"),
@@ -384,10 +405,12 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       return
     }
 
-    const model = {
-      modelID: currentModel.id,
-      providerID: currentModel.provider.id,
-    }
+    const model = currentModel
+      ? {
+          modelID: currentModel.id,
+          providerID: currentModel.provider.id,
+        }
+      : undefined
     const agent = currentAgent.name
     const context = prompt.context.items().slice()
     const draft: FollowupDraft = {
@@ -398,6 +421,12 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       agent,
       model,
       variant,
+      webchat: webchatEnabled
+        ? {
+            enabled: true,
+            browser: input.webchatBrowser?.() ?? "chrome",
+          }
+        : undefined,
     }
 
     const clearInput = () => {
@@ -429,12 +458,19 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     input.onSubmit?.()
 
     if (mode === "shell") {
+      if (webchatEnabled) {
+        showToast({
+          title: "Webchat mode active",
+          description: "Shell mode is disabled while webchat mode is enabled.",
+        })
+        return
+      }
       clearInput()
       client.session
         .shell({
           sessionID: session.id,
           agent,
-          model,
+          model: model ?? { providerID: "webchat", modelID: "browser" },
           command: text,
         })
         .catch((err) => {
@@ -459,7 +495,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
             command: commandName,
             arguments: args.join(" "),
             agent,
-            model: `${model.providerID}/${model.modelID}`,
+            model: model ? `${model.providerID}/${model.modelID}` : "webchat/browser",
             variant,
             parts: images.map((attachment) => ({
               id: Identifier.ascending("part"),

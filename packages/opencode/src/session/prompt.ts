@@ -49,6 +49,8 @@ import { Shell } from "@/shell/shell"
 import { Truncate } from "@/tool/truncate"
 import { decodeDataUrl } from "@/util/data-url"
 import { Process } from "@/util/process"
+import { Config } from "@/config/config"
+import { Webchat } from "@/webchat"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -112,6 +114,12 @@ export namespace SessionPrompt {
     format: MessageV2.Format.optional(),
     system: z.string().optional(),
     variant: z.string().optional(),
+    webchat: z
+      .object({
+        enabled: z.boolean().optional(),
+        browser: z.enum(["chrome", "edge"]).optional(),
+      })
+      .optional(),
     parts: z.array(
       z.discriminatedUnion("type", [
         MessageV2.TextPart.omit({
@@ -165,6 +173,11 @@ export namespace SessionPrompt {
 
     const message = await createUserMessage(input)
     await Session.touch(input.sessionID)
+    log.info("prompt.created", {
+      sessionID: input.sessionID,
+      webchat: input.webchat?.enabled === true,
+      browser: input.webchat?.browser,
+    })
 
     // this is backwards compatibility for allowing `tools` to be specified when
     // prompting
@@ -185,8 +198,81 @@ export namespace SessionPrompt {
       return message
     }
 
+    if (input.webchat?.enabled === true) {
+      return promptWebchat({
+        input,
+        message,
+      })
+    }
+
     return loop({ sessionID: input.sessionID })
   })
+
+  async function promptWebchat(input: { input: PromptInput; message: MessageV2.WithParts }) {
+    const cfg = await Config.get()
+    const txt = input.message.parts
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n")
+      .trim()
+    log.info("prompt.webchat.start", {
+      sessionID: input.input.sessionID,
+      browser: input.input.webchat?.browser,
+      hasText: txt.length > 0,
+    })
+    const content = await Webchat.run({
+      prompt: txt,
+      browser: input.input.webchat?.browser ?? cfg.webchat?.browser ?? "chrome",
+      url: cfg.webchat?.url,
+      timeout: cfg.webchat?.timeout,
+      input: cfg.webchat?.input_selector,
+      response: cfg.webchat?.response_selector,
+      settle: cfg.webchat?.settle,
+    })
+    const model = input.message.info.model
+    const assistant = (await Session.updateMessage({
+      id: MessageID.ascending(),
+      parentID: input.message.info.id,
+      role: "assistant",
+      mode: input.message.info.agent,
+      agent: input.message.info.agent,
+      variant: input.message.info.variant,
+      path: {
+        cwd: Instance.directory,
+        root: Instance.worktree,
+      },
+      cost: 0,
+      tokens: {
+        input: 0,
+        output: 0,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      },
+      modelID: model.modelID,
+      providerID: model.providerID,
+      time: {
+        created: Date.now(),
+      },
+      finish: "stop",
+      sessionID: input.input.sessionID,
+    })) as MessageV2.Assistant
+    await Session.updatePart({
+      id: PartID.ascending(),
+      messageID: assistant.id,
+      sessionID: input.input.sessionID,
+      type: "text",
+      text: content || "No response captured from browser webchat.",
+    })
+    log.info("prompt.webchat.done", {
+      sessionID: input.input.sessionID,
+      assistantID: assistant.id,
+      size: content.length,
+    })
+    return {
+      info: assistant,
+      parts: await Session.parts(assistant.id),
+    }
+  }
 
   export async function resolvePromptParts(template: string): Promise<PromptInput["parts"]> {
     const parts: PromptInput["parts"] = [

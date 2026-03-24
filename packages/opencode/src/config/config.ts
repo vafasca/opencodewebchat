@@ -1083,6 +1083,18 @@ export namespace Config {
       small_model: ModelId.describe(
         "Small model to use for tasks like title generation in the format of provider/model",
       ).optional(),
+      webchat: z
+        .object({
+          enabled: z.boolean().optional().describe("Enable browser-driven webchat mode by default"),
+          browser: z.enum(["chrome", "edge"]).optional().describe("Browser channel used by webchat mode"),
+          url: z.string().optional().describe("Chat URL opened by Playwright for each webchat prompt"),
+          input_selector: z.string().optional().describe("CSS selector for the prompt input element"),
+          response_selector: z.string().optional().describe("CSS selector for assistant response messages"),
+          timeout: z.number().int().positive().optional().describe("Timeout in milliseconds for webchat automation"),
+          settle: z.number().int().positive().optional().describe("Stabilization wait in milliseconds for response"),
+        })
+        .optional()
+        .describe("Browser webchat mode configuration"),
       default_agent: z
         .string()
         .optional()

@@ -1056,6 +1056,18 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   })
 
   const variants = createMemo(() => ["default", ...local.model.variant.list()])
+  const [webchat, setWebchat] = createSignal(false)
+  const [browser, setBrowser] = createSignal<"chrome" | "edge">("chrome")
+  const toggleWebchat = () => {
+    const next = !webchat()
+    console.info("[webchat] toggle", { enabled: next, browser: browser() })
+    setWebchat(next)
+  }
+  const toggleBrowser = () => {
+    const next = browser() === "chrome" ? "edge" : "chrome"
+    console.info("[webchat] browser", { browser: next })
+    setBrowser(next)
+  }
   const accepting = createMemo(() => {
     const id = params.id
     if (!id) return permission.isAutoAcceptingDirectory(sdk.directory)
@@ -1095,6 +1107,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     onQueue: props.onQueue,
     onAbort: props.onAbort,
     onSubmit: props.onSubmit,
+    webchatEnabled: webchat,
+    webchatBrowser: browser,
   })
 
   const handleKeyDown = (event: KeyboardEvent) => {
@@ -1481,23 +1495,82 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                   </TooltipKeybind>
                 </div>
                 <div data-component="prompt-model-control">
-                  <Show
-                    when={providers.paid().length > 0}
-                    fallback={
+                  <Tooltip placement="top" value="Enable browser webchat mode (no API key model required)">
+                    <Button
+                      data-action="prompt-webchat"
+                      variant={webchat() ? "secondary" : "ghost"}
+                      size="normal"
+                      class="min-w-0 text-13-regular text-text-base"
+                      style={control()}
+                      onClick={toggleWebchat}
+                    >
+                      Webchat
+                    </Button>
+                  </Tooltip>
+                  <Show when={webchat()}>
+                    <Tooltip placement="top" value="Switch browser channel for webchat">
+                      <Button
+                        data-action="prompt-webchat-browser"
+                        variant="ghost"
+                        size="normal"
+                        class="min-w-0 text-13-regular text-text-base uppercase"
+                        style={control()}
+                        onClick={toggleBrowser}
+                      >
+                        {browser()}
+                      </Button>
+                    </Tooltip>
+                  </Show>
+                  <Show when={!webchat()}>
+                    <Show
+                      when={providers.paid().length > 0}
+                      fallback={
+                        <TooltipKeybind
+                          placement="top"
+                          gutter={4}
+                          title={language.t("command.model.choose")}
+                          keybind={command.keybind("model.choose")}
+                        >
+                          <Button
+                            data-action="prompt-model"
+                            as="div"
+                            variant="ghost"
+                            size="normal"
+                            class="min-w-0 max-w-[320px] text-13-regular text-text-base group"
+                            style={control()}
+                            onClick={() => dialog.show(() => <DialogSelectModelUnpaid model={local.model} />)}
+                          >
+                            <Show when={local.model.current()?.provider?.id}>
+                              <ProviderIcon
+                                id={local.model.current()!.provider.id}
+                                class="size-4 shrink-0 opacity-40 group-hover:opacity-100 transition-opacity duration-150"
+                                style={{ "will-change": "opacity", transform: "translateZ(0)" }}
+                              />
+                            </Show>
+                            <span class="truncate">
+                              {local.model.current()?.name ?? language.t("dialog.model.select.title")}
+                            </span>
+                            <Icon name="chevron-down" size="small" class="shrink-0" />
+                          </Button>
+                        </TooltipKeybind>
+                      }
+                    >
                       <TooltipKeybind
                         placement="top"
                         gutter={4}
                         title={language.t("command.model.choose")}
                         keybind={command.keybind("model.choose")}
                       >
-                        <Button
-                          data-action="prompt-model"
-                          as="div"
-                          variant="ghost"
-                          size="normal"
-                          class="min-w-0 max-w-[320px] text-13-regular text-text-base group"
-                          style={control()}
-                          onClick={() => dialog.show(() => <DialogSelectModelUnpaid model={local.model} />)}
+                        <ModelSelectorPopover
+                          model={local.model}
+                          triggerAs={Button}
+                          triggerProps={{
+                            variant: "ghost",
+                            size: "normal",
+                            style: control(),
+                            class: "min-w-0 max-w-[320px] text-13-regular text-text-base group",
+                            "data-action": "prompt-model",
+                          }}
                         >
                           <Show when={local.model.current()?.provider?.id}>
                             <ProviderIcon
@@ -1510,43 +1583,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                             {local.model.current()?.name ?? language.t("dialog.model.select.title")}
                           </span>
                           <Icon name="chevron-down" size="small" class="shrink-0" />
-                        </Button>
+                        </ModelSelectorPopover>
                       </TooltipKeybind>
-                    }
-                  >
-                    <TooltipKeybind
-                      placement="top"
-                      gutter={4}
-                      title={language.t("command.model.choose")}
-                      keybind={command.keybind("model.choose")}
-                    >
-                      <ModelSelectorPopover
-                        model={local.model}
-                        triggerAs={Button}
-                        triggerProps={{
-                          variant: "ghost",
-                          size: "normal",
-                          style: control(),
-                          class: "min-w-0 max-w-[320px] text-13-regular text-text-base group",
-                          "data-action": "prompt-model",
-                        }}
-                      >
-                        <Show when={local.model.current()?.provider?.id}>
-                          <ProviderIcon
-                            id={local.model.current()!.provider.id}
-                            class="size-4 shrink-0 opacity-40 group-hover:opacity-100 transition-opacity duration-150"
-                            style={{ "will-change": "opacity", transform: "translateZ(0)" }}
-                          />
-                        </Show>
-                        <span class="truncate">
-                          {local.model.current()?.name ?? language.t("dialog.model.select.title")}
-                        </span>
-                        <Icon name="chevron-down" size="small" class="shrink-0" />
-                      </ModelSelectorPopover>
-                    </TooltipKeybind>
+                    </Show>
                   </Show>
                 </div>
-                <div data-component="prompt-variant-control">
+                <Show when={!webchat()}>
+                  <div data-component="prompt-variant-control">
                   <TooltipKeybind
                     placement="top"
                     gutter={4}
@@ -1566,7 +1609,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                       variant="ghost"
                     />
                   </TooltipKeybind>
-                </div>
+                  </div>
+                </Show>
                 <TooltipKeybind
                   placement="top"
                   gutter={8}
