@@ -72,6 +72,25 @@ export namespace Webchat {
       return ""
     }
 
+    if (process.platform === "win32") {
+      log.warn("webchat.run.win32.node_driver", {
+        note: "using node driver as primary path on windows",
+      })
+      const node = await nodeRun({
+        browser: input.browser,
+        target: mode,
+        prompt: input.prompt,
+        timeout,
+        settle,
+        url,
+        input: input.input,
+        response: input.response,
+        headless: input.headless ?? false,
+      })
+      if (node?.ok && node.text) return node.text
+      return `No se pudo abrir navegador en Windows driver. Detalle: ${node?.error ?? "sin detalle"}`
+    }
+
     const playwright = await import("playwright").catch((err) => {
       const txt = err instanceof Error ? err.message : String(err)
       log.error("webchat.run.playwright_import_failed", { error: txt })

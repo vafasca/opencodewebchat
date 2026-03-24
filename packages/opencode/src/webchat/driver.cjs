@@ -66,17 +66,25 @@ const run = async () => {
   const headless = !!data.headless
   const channel = data.browser === "edge" ? "msedge" : "chrome"
 
-  let browser = await chromium.launch({ channel, headless }).catch(() => undefined)
-  if (!browser) browser = await chromium.launch({ headless }).catch(() => undefined)
+  const opts = {
+    headless,
+    args: ["--start-maximized", "--disable-blink-features=AutomationControlled"],
+  }
+  let browser = await chromium.launch({ channel, ...opts }).catch(() => undefined)
+  if (!browser) browser = await chromium.launch({ ...opts }).catch(() => undefined)
   if (!browser) {
     const bin = pick(data.browser)
-    if (bin) browser = await chromium.launch({ executablePath: bin, headless }).catch(() => undefined)
+    if (bin) browser = await chromium.launch({ executablePath: bin, ...opts }).catch(() => undefined)
   }
   if (!browser) {
     return { ok: false, error: "node-driver launch failed (channel + fallback + executablePath)." }
   }
 
-  const ctx = await browser.newContext()
+  const ctx = await browser.newContext({
+    viewport: null,
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  })
   const page = await ctx.newPage()
   await page.goto(url, { waitUntil: "domcontentloaded", timeout })
   const input = await find(page, inputs, timeout)
