@@ -1062,11 +1062,28 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const [saved, setSaved] = createSignal(false)
   const [active, setActive] = createSignal(false)
   const headers = () => ({ "Content-Type": "application/json", "x-opencode-directory": sdk.directory })
+  const callWebchat = async (path: string, init?: RequestInit) => {
+    const list = [new URL(path, sdk.url).toString(), new URL(path, "http://127.0.0.1:4096").toString()]
+    for (const item of [...new Set(list)]) {
+      console.info("[webchat] request", { url: item, method: init?.method ?? "GET" })
+      const res = await fetch(item, {
+        ...init,
+        headers: { ...headers(), ...(init?.headers ?? {}) },
+      }).catch((err) => {
+        console.warn("[webchat] request failed", { url: item, err })
+        return undefined
+      })
+      if (!res) continue
+      if (!res.ok) {
+        console.warn("[webchat] response not ok", { url: item, status: res.status })
+        continue
+      }
+      return res
+    }
+  }
   const checkLogin = async () => {
     const query = new URLSearchParams({ browser: browser(), target: target() }).toString()
-    const result = await fetch(`${sdk.url}/session/webchat/login/status?${query}`, {
-      headers: headers(),
-    })
+    const result = await callWebchat(`/session/webchat/login/status?${query}`)
       .then((x) => x.json() as Promise<{ saved?: boolean; active?: boolean }>)
       .catch(() => ({}))
     setSaved(result.saved === true)
@@ -1074,17 +1091,15 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     console.info("[webchat] status", { saved: result.saved === true, active: result.active === true })
   }
   const openLogin = async () => {
-    await fetch(`${sdk.url}/session/webchat/login`, {
+    await callWebchat("/session/webchat/login", {
       method: "POST",
-      headers: headers(),
       body: JSON.stringify({ browser: browser(), target: target() }),
     }).catch(() => undefined)
     await checkLogin()
   }
   const confirmLogin = async () => {
-    await fetch(`${sdk.url}/session/webchat/login/confirm`, {
+    await callWebchat("/session/webchat/login/confirm", {
       method: "POST",
-      headers: headers(),
       body: JSON.stringify({ browser: browser(), target: target() }),
     }).catch(() => undefined)
     await checkLogin()
