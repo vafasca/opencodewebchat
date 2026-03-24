@@ -72,13 +72,29 @@ export namespace Webchat {
         channel,
         headless: input.headless ?? false,
       })
-      .catch((err) => {
+      .catch(async (err) => {
         const txt = err instanceof Error ? err.message : String(err)
         log.error("webchat.run.launch_failed", { error: txt, channel })
-        return undefined
+        log.warn("webchat.run.launch_fallback", {
+          note: "retrying with bundled chromium executable and no channel",
+        })
+        const retry = await playwright.chromium
+          .launch({
+            headless: input.headless ?? false,
+          })
+          .catch((retryErr) => {
+            const retryTxt = retryErr instanceof Error ? retryErr.message : String(retryErr)
+            log.error("webchat.run.launch_fallback_failed", { error: retryTxt })
+            return undefined
+          })
+        return retry
       })
     if (!browser) {
-      return "No se pudo abrir el navegador con Playwright. Revisa instalación y channel (chrome/msedge)."
+      return [
+        "No se pudo abrir el navegador con Playwright.",
+        "Se intentó channel (chrome/msedge) y fallback chromium interno.",
+        "Revisa instalación de navegador y permisos de ventana.",
+      ].join(" ")
     }
     const ctx = await browser.newContext()
     const page = await ctx.newPage()
