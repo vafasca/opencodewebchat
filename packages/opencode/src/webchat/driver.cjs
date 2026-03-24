@@ -1,5 +1,7 @@
 const { chromium } = require("playwright")
 const { existsSync } = require("fs")
+const { mkdir } = require("fs/promises")
+const pathUtil = require("path")
 
 const target = {
   chatgpt: {
@@ -135,6 +137,7 @@ const run = async () => {
 
   const ctx = await browser.newContext({
     viewport: null,
+    ...(data.storage && existsSync(data.storage) ? { storageState: data.storage } : {}),
     userAgent:
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
   })
@@ -177,6 +180,10 @@ const run = async () => {
     }
     if (same >= Math.max(1, Math.floor(settle / 500))) break
     await page.waitForTimeout(500)
+  }
+  if (data.storage) {
+    await mkdir(pathUtil.dirname(data.storage), { recursive: true }).catch(() => undefined)
+    await ctx.storageState({ path: data.storage }).catch(() => undefined)
   }
   await ctx.close().catch(() => undefined)
   await browser.close().catch(() => undefined)

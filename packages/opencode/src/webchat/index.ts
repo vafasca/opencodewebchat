@@ -1,10 +1,14 @@
 import { Log } from "@/util/log"
-import type { Page } from "playwright"
+import type { Browser, BrowserContext, Page } from "playwright"
 import { existsSync } from "fs"
 import { fileURLToPath } from "url"
+import { mkdir } from "fs/promises"
+import pathUtil from "path"
+import os from "os"
 
 export namespace Webchat {
   const log = Log.create({ service: "webchat" })
+  const login = new Map<string, { browser: Browser; context: BrowserContext }>()
 
   export const DEFAULT_URL = "https://chatgpt.com/"
 
@@ -47,6 +51,66 @@ export namespace Webchat {
     headless?: boolean
   }
 
+  export type LoginInput = {
+    browser: "chrome" | "edge"
+    target: "chatgpt" | "claude"
+  }
+
+  export const loginOpen = async (input: LoginInput) => {
+    const key = `${input.target}:${input.browser}`
+    const old = login.get(key)
+    if (old) {
+      await old.browser.close().catch(() => undefined)
+      login.delete(key)
+    }
+    const playwright = await import("playwright").catch(() => undefined)
+    if (!playwright) return false
+    const channel = input.browser === "edge" ? "msedge" : "chrome"
+    const opts = {
+      headless: false,
+      args: ["--start-maximized", "--disable-blink-features=AutomationControlled"],
+    }
+    let browser = await playwright.chromium.launch({ channel, ...opts }).catch(() => undefined)
+    if (!browser) browser = await playwright.chromium.launch(opts).catch(() => undefined)
+    if (!browser) {
+      const bin = pickPath(input.browser)
+      if (bin) browser = await playwright.chromium.launch({ executablePath: bin, ...opts }).catch(() => undefined)
+    }
+    if (!browser) return false
+    const file = storageFile(input)
+    const context = await browser.newContext({
+      viewport: null,
+      ...(existsSync(file) ? { storageState: file } : {}),
+    })
+    const page = await context.newPage()
+    await page.goto(target[input.target].url, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => undefined)
+    login.set(key, { browser, context })
+    log.info("webchat.login.open", { key, file })
+    return true
+  }
+
+  export const loginConfirm = async (input: LoginInput) => {
+    const key = `${input.target}:${input.browser}`
+    const item = login.get(key)
+    if (!item) return false
+    const file = storageFile(input)
+    await mkdir(pathUtil.dirname(file), { recursive: true })
+    await item.context.storageState({ path: file }).catch(() => undefined)
+    await item.browser.close().catch(() => undefined)
+    login.delete(key)
+    log.info("webchat.login.confirm", { key, file })
+    return true
+  }
+
+  export const loginStatus = async (input: LoginInput) => {
+    const key = `${input.target}:${input.browser}`
+    const file = storageFile(input)
+    return {
+      active: login.has(key),
+      saved: existsSync(file),
+    }
+  }
+
   export const run = async (input: Input) => {
     const mode = input.target ?? "chatgpt"
     const cfg = target[mode]
@@ -86,6 +150,7 @@ export namespace Webchat {
         input: input.input,
         response: input.response,
         headless: input.headless ?? false,
+        storage: storageFile({ target: mode, browser: input.browser }),
       })
       if (node?.ok && node.text) return node.text
       return `No se pudo abrir navegador en Windows driver. Detalle: ${node?.error ?? "sin detalle"}`
@@ -146,6 +211,7 @@ export namespace Webchat {
         input: input.input,
         response: input.response,
         headless: input.headless ?? false,
+        storage: storageFile({ target: mode, browser: input.browser }),
       })
       if (node?.ok && node.text) return node.text
       return [
@@ -154,7 +220,10 @@ export namespace Webchat {
         `Detalle: ${node?.error ?? "sin detalle"}`,
       ].join(" ")
     }
-    const ctx = await browser.newContext()
+    const file = storageFile({ target: mode, browser: input.browser })
+    const ctx = await browser.newContext({
+      ...(existsSync(file) ? { storageState: file } : {}),
+    })
     const page = await ctx.newPage()
     await page.goto(url, {
       waitUntil: "domcontentloaded",
@@ -300,6 +369,9 @@ export namespace Webchat {
     }
   }
 
+  const storageFile = (input: LoginInput) =>
+    pathUtil.join(os.homedir(), ".opencode", "webchat", `${input.target}-${input.browser}.json`)
+
   const nodeRun = async (input: {
     browser: "chrome" | "edge"
     target: "chatgpt" | "claude"
@@ -310,6 +382,7 @@ export namespace Webchat {
     input?: string
     response?: string
     headless: boolean
+    storage: string
   }) => {
     const file = fileURLToPath(new URL("./driver.cjs", import.meta.url))
     log.warn("webchat.run.node_driver.start", {

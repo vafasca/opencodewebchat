@@ -1059,6 +1059,36 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const [webchat, setWebchat] = createSignal(false)
   const [browser, setBrowser] = createSignal<"chrome" | "edge">("chrome")
   const [target, setTarget] = createSignal<"chatgpt" | "claude">("chatgpt")
+  const [saved, setSaved] = createSignal(false)
+  const [active, setActive] = createSignal(false)
+  const headers = () => ({ "Content-Type": "application/json", "x-opencode-directory": sdk.directory })
+  const checkLogin = async () => {
+    const query = new URLSearchParams({ browser: browser(), target: target() }).toString()
+    const result = await fetch(`${sdk.url}/session/webchat/login/status?${query}`, {
+      headers: headers(),
+    })
+      .then((x) => x.json() as Promise<{ saved?: boolean; active?: boolean }>)
+      .catch(() => ({}))
+    setSaved(result.saved === true)
+    setActive(result.active === true)
+    console.info("[webchat] status", { saved: result.saved === true, active: result.active === true })
+  }
+  const openLogin = async () => {
+    await fetch(`${sdk.url}/session/webchat/login`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ browser: browser(), target: target() }),
+    }).catch(() => undefined)
+    await checkLogin()
+  }
+  const confirmLogin = async () => {
+    await fetch(`${sdk.url}/session/webchat/login/confirm`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ browser: browser(), target: target() }),
+    }).catch(() => undefined)
+    await checkLogin()
+  }
   const toggleWebchat = () => {
     const next = !webchat()
     console.info("[webchat] toggle", { enabled: next, browser: browser(), target: target() })
@@ -1068,12 +1098,18 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     const next = browser() === "chrome" ? "edge" : "chrome"
     console.info("[webchat] browser", { browser: next })
     setBrowser(next)
+    checkLogin()
   }
   const toggleTarget = () => {
     const next = target() === "chatgpt" ? "claude" : "chatgpt"
     console.info("[webchat] target", { target: next })
     setTarget(next)
+    checkLogin()
   }
+  createEffect(() => {
+    if (!webchat()) return
+    checkLogin()
+  })
   const accepting = createMemo(() => {
     const id = params.id
     if (!id) return permission.isAutoAcceptingDirectory(sdk.directory)
@@ -1514,6 +1550,37 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                       Webchat
                     </Button>
                   </Tooltip>
+                  <Show when={webchat()}>
+                    <div class="flex items-center gap-1">
+                      <button
+                        type="button"
+                        class="h-2 w-2 rounded-full"
+                        style={{ "background-color": saved() ? "var(--color-icon-success-base)" : "var(--color-icon-warning-base)" }}
+                        title={saved() ? "Webchat login guardado" : "Webchat sin login guardado"}
+                      />
+                      <Button
+                        data-action="prompt-webchat-login"
+                        variant="ghost"
+                        size="normal"
+                        class="min-w-0 text-13-regular text-text-base uppercase"
+                        style={control()}
+                        onClick={openLogin}
+                      >
+                        Login
+                      </Button>
+                      <Button
+                        data-action="prompt-webchat-login-confirm"
+                        variant="ghost"
+                        size="normal"
+                        class="min-w-0 text-13-regular text-text-base uppercase"
+                        style={control()}
+                        onClick={confirmLogin}
+                        disabled={!active()}
+                      >
+                        Guardar
+                      </Button>
+                    </div>
+                  </Show>
                   <Show when={webchat()}>
                     <Tooltip placement="top" value="Switch target chat (ChatGPT/Claude)">
                       <Button
