@@ -341,8 +341,54 @@ export namespace Webchat {
   }
 
   const send = async (page: Page, input: string, txt: string, mode: "chatgpt" | "claude") => {
-    await page.locator(input).fill(txt)
     await page.locator(input).click().catch(() => undefined)
+    await page
+      .locator(input)
+      .evaluate((el, val) => {
+        if (!(el instanceof HTMLElement)) return false
+        el.focus()
+        const dt = new DataTransfer()
+        dt.setData("text/plain", val)
+        const ev = new ClipboardEvent("paste", {
+          clipboardData: dt,
+          bubbles: true,
+        })
+        el.dispatchEvent(ev)
+        if (el instanceof HTMLTextAreaElement && !el.value.includes(val)) {
+          el.value = val
+          el.dispatchEvent(new Event("input", { bubbles: true }))
+        }
+        return true
+      }, txt)
+      .catch(() => false)
+    await page.locator(input).fill(txt).catch(() => undefined)
+    await page.waitForTimeout(600)
+    const fast = await page
+      .locator(input)
+      .first()
+      .evaluate((el) => {
+        const root = el.closest("form") ?? document
+        const btn = root.querySelector(".composer-submit-button-color")
+        if (!(btn instanceof HTMLButtonElement)) return false
+        const label = (btn.getAttribute("aria-label") ?? "").toLowerCase()
+        if (label.includes("start voice") || label.includes("iniciar voz")) return false
+        if (btn.disabled) return false
+        btn.click()
+        return true
+      })
+      .catch(() => false)
+    if (fast) {
+      await page.waitForTimeout(700)
+      const sent = await page
+        .locator(input)
+        .evaluate((el, expected) => {
+          if (el instanceof HTMLTextAreaElement) return !el.value.includes(expected)
+          const val = el.textContent ?? ""
+          return !val.includes(expected)
+        }, txt)
+        .catch(() => false)
+      if (sent) return
+    }
     await page.locator(input).press("Enter").catch(() => page.keyboard.press("Enter"))
     await page.waitForTimeout(700)
     const stuck = await page
