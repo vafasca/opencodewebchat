@@ -199,11 +199,7 @@ export namespace SessionPrompt {
       return message
     }
 
-    if (input.webchat?.enabled === true && !input.model) {
-      log.info("prompt.webchat.browser_fallback", {
-        sessionID: input.sessionID,
-        reason: "no model selected",
-      })
+    if (input.webchat?.enabled === true) {
       return promptWebchat({
         input,
         message,
