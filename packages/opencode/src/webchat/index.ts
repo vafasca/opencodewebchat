@@ -372,6 +372,7 @@ export namespace Webchat {
     const list =
       mode === "chatgpt"
         ? [
+            "#composer-submit-button",
             "button[data-testid='composer-send-button']",
             "button[data-testid='composer-submit-button']",
             "button[data-testid='fruitjuice-send-button']",
@@ -387,6 +388,7 @@ export namespace Webchat {
             "form button[type='submit']",
           ]
         : [
+            "#composer-submit-button",
             "button[data-testid*='send']",
             "button[data-testid='composer-send-button']",
             "button[aria-label*='Send']",
