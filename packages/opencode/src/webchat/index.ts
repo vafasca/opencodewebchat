@@ -373,6 +373,8 @@ export namespace Webchat {
       mode === "chatgpt"
         ? [
             "#composer-submit-button",
+            ".composer-submit-button-color",
+            "button.composer-submit-button-color",
             "button[data-testid='composer-send-button']",
             "button[data-testid='composer-submit-button']",
             "button[data-testid='fruitjuice-send-button']",
@@ -389,6 +391,8 @@ export namespace Webchat {
           ]
         : [
             "#composer-submit-button",
+            ".composer-submit-button-color",
+            "button.composer-submit-button-color",
             "button[data-testid*='send']",
             "button[data-testid='composer-send-button']",
             "button[aria-label*='Send']",
