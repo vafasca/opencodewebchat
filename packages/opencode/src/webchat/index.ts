@@ -354,12 +354,31 @@ export namespace Webchat {
       }, txt)
       .catch(() => false)
     if (!stuck) return
+    await page.keyboard.press("Control+Enter").catch(() => undefined)
+    await page.keyboard.press("Meta+Enter").catch(() => undefined)
+    await page.waitForTimeout(700)
+    const sendByHotkey = await page
+      .locator(input)
+      .evaluate((el, expected) => {
+        if (el instanceof HTMLTextAreaElement) return !el.value.includes(expected)
+        const val = el.textContent ?? ""
+        return !val.includes(expected)
+      }, txt)
+      .catch(() => false)
+    if (sendByHotkey) {
+      log.warn("webchat.run.send_hotkey_fallback")
+      return
+    }
     const list =
       mode === "chatgpt"
         ? [
+            "button[data-testid='composer-send-button']",
+            "button[data-testid='composer-submit-button']",
             "button[data-testid='fruitjuice-send-button']",
             "button[data-testid='send-button']",
             "button[data-testid*='send']",
+            "button[aria-label*='Submit']",
+            "button[aria-label*='Enviar mensaje']",
             "button[aria-label*='Send']",
             "button[aria-label*='Enviar']",
             "button[aria-label*='send']",
@@ -369,6 +388,7 @@ export namespace Webchat {
           ]
         : [
             "button[data-testid*='send']",
+            "button[data-testid='composer-send-button']",
             "button[aria-label*='Send']",
             "button[aria-label*='Enviar']",
             "button[aria-label*='send']",
@@ -379,12 +399,21 @@ export namespace Webchat {
       const ok = await page
         .locator(item)
         .first()
-        .click({ timeout: 1500 })
+        .click({ timeout: 2500 })
         .then(() => true)
         .catch(() => false)
       if (!ok) continue
       log.warn("webchat.run.send_click_fallback", { selector: item })
-      return
+      await page.waitForTimeout(500)
+      const sent = await page
+        .locator(input)
+        .evaluate((el, expected) => {
+          if (el instanceof HTMLTextAreaElement) return !el.value.includes(expected)
+          const val = el.textContent ?? ""
+          return !val.includes(expected)
+        }, txt)
+        .catch(() => false)
+      if (sent) return
     }
     const form = await page
       .locator(input)
