@@ -199,7 +199,11 @@ export namespace SessionPrompt {
       return message
     }
 
-    if (input.webchat?.enabled === true) {
+    if (input.webchat?.enabled === true && !input.model) {
+      log.info("prompt.webchat.browser_fallback", {
+        sessionID: input.sessionID,
+        reason: "no model selected",
+      })
       return promptWebchat({
         input,
         message,
@@ -213,11 +217,7 @@ export namespace SessionPrompt {
     await SessionStatus.set(input.input.sessionID, { type: "busy" })
     await using _ = defer(() => SessionStatus.set(input.input.sessionID, { type: "idle" }))
     const cfg = await Config.get()
-    const txt = input.message.parts
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
-      .join("\n")
-      .trim()
+    const txt = await webchatPrompt(input)
     log.info("prompt.webchat.start", {
       sessionID: input.input.sessionID,
       browser: input.input.webchat?.browser,
@@ -295,6 +295,63 @@ export namespace SessionPrompt {
       info: assistant,
       parts: await MessageV2.parts(assistant.id),
     }
+  }
+
+  const webchatPrompt = async (input: { input: PromptInput; message: MessageV2.WithParts }) => {
+    const model = await Provider.getModel(input.message.info.model.providerID, input.message.info.model.modelID)
+    const agent = await Agent.get(input.message.info.agent)
+    const msgs = await MessageV2.filterCompacted(MessageV2.stream(input.input.sessionID))
+    const env = await SystemPrompt.environment(model)
+    const skills = agent ? await SystemPrompt.skills(agent) : undefined
+    const inst = await InstructionPrompt.system()
+    const head = [
+      ...(agent?.prompt ? [agent.prompt] : [SystemPrompt.provider(model)]),
+      ...(input.input.system ? [input.input.system] : []),
+      ...(input.message.info.system ? [input.message.info.system] : []),
+    ]
+      .filter((item) => item)
+      .join("\n\n")
+    const list = MessageV2.toModelMessages(msgs, model, { stripMedia: true })
+    const chat = list
+      .map((item) => {
+        const txt =
+          typeof item.content === "string"
+            ? item.content
+            : item.content
+                .map((part) => {
+                  if (part.type === "text") return part.text
+                  if (part.type === "reasoning") return part.text
+                  if (part.type.startsWith("tool-")) {
+                    if (part.state === "input-available") return `[tool:${part.type} input]`
+                    if (part.state === "output-available")
+                      return `[tool:${part.type} output]\n${typeof part.output === "string" ? part.output : JSON.stringify(part.output)}`
+                    return `[tool:${part.type} error]\n${part.errorText}`
+                  }
+                  if (part.type === "step-start") return "[step-start]"
+                  return ""
+                })
+                .filter((item) => item)
+                .join("\n")
+        return `${item.role.toUpperCase()}:\n${txt}`.trim()
+      })
+      .join("\n\n")
+    return [
+      "<SYSTEM>",
+      ...env,
+      ...(skills ? [skills] : []),
+      ...inst,
+      head,
+      "</SYSTEM>",
+      "",
+      "<CONVERSATION>",
+      chat,
+      "</CONVERSATION>",
+      "",
+      "Responde al último mensaje del usuario usando el mismo comportamiento del agente configurado.",
+    ]
+      .filter((item) => item)
+      .join("\n")
+      .trim()
   }
 
   export async function resolvePromptParts(template: string): Promise<PromptInput["parts"]> {
