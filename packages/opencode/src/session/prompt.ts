@@ -252,7 +252,7 @@ export namespace SessionPrompt {
       ].join("\n")
     })
     const model =
-      input.message.info.role === "assistant" ? input.message.info.model : await lastModel(input.input.sessionID)
+      input.message.info.role === "assistant" ? input.message.info.mode : await lastModel(input.input.sessionID)
     const assistant = (await Session.updateMessage({
       id: MessageID.ascending(),
       parentID: input.message.info.id,
@@ -271,8 +271,8 @@ export namespace SessionPrompt {
         reasoning: 0,
         cache: { read: 0, write: 0 },
       },
-      modelID: model.modelID,
-      providerID: model.providerID,
+      modelID: (typeof model === "string" ? model : model.modelID) as any,
+      providerID: (typeof model === "string" ? model : model.providerID) as any,
       time: {
         created: Date.now(),
       },
@@ -717,7 +717,7 @@ export namespace SessionPrompt {
             cache: { read: 0, write: 0 },
           },
           modelID: model.id,
-          providerID: model.providerID,
+          providerID: (typeof model === "string" ? model : model.providerID) as any,
           time: {
             created: Date.now(),
           },
@@ -1691,8 +1691,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       role: "user",
       agent: input.agent,
       model: {
-        providerID: model.providerID,
-        modelID: model.modelID,
+        providerID: (typeof model === "string" ? model : model.providerID) as any,
+        modelID: (typeof model === "string" ? model : model.modelID) as any,
       },
     }
     await Session.updateMessage(userMsg)
@@ -1727,8 +1727,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         reasoning: 0,
         cache: { read: 0, write: 0 },
       },
-      modelID: model.modelID,
-      providerID: model.providerID,
+      modelID: (typeof model === "string" ? model : model.modelID) as any,
+      providerID: (typeof model === "string" ? model : model.providerID) as any,
     }
     await Session.updateMessage(msg)
     const part: MessageV2.Part = {
