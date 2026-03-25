@@ -403,12 +403,28 @@ export namespace Webchat {
           ]
     for (const item of list) {
       const ok = await page
-        .locator(item)
+        .locator(input)
         .first()
-        .click({ timeout: 2500 })
-        .then(() => true)
+        .evaluate((el, sel) => {
+          const root = el.closest("form") ?? document
+          const pick = root.querySelector(sel)
+          if (!(pick instanceof HTMLElement)) return false
+          const style = window.getComputedStyle(pick)
+          if (style.display === "none" || style.visibility === "hidden") return false
+          if (pick instanceof HTMLButtonElement && pick.disabled) return false
+          pick.click()
+          return true
+        }, item)
         .catch(() => false)
-      if (!ok) continue
+      if (!ok) {
+        const alt = await page
+          .locator(item)
+          .first()
+          .click({ timeout: 2500 })
+          .then(() => true)
+          .catch(() => false)
+        if (!alt) continue
+      }
       log.warn("webchat.run.send_click_fallback", { selector: item })
       await page.waitForTimeout(500)
       const sent = await page
