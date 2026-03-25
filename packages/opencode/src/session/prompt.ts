@@ -251,7 +251,8 @@ export namespace SessionPrompt {
         "Prueba: bunx playwright install",
       ].join("\n")
     })
-    const model = input.message.info.model
+    const model =
+      input.message.info.role === "assistant" ? input.message.info.model : await lastModel(input.input.sessionID)
     const assistant = (await Session.updateMessage({
       id: MessageID.ascending(),
       parentID: input.message.info.id,

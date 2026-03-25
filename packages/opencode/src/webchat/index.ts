@@ -184,7 +184,7 @@ export namespace Webchat {
         headless: input.headless ?? false,
         storage: storageFile({ target: mode, browser: input.browser }),
       })
-      if (node?.ok && node.text) return node.text
+      if (node?.ok && "text" in node && node.text) return node.text
       return `No se pudo abrir navegador en Windows driver. Detalle: ${node?.error ?? "sin detalle"}`
     }
 
@@ -245,7 +245,7 @@ export namespace Webchat {
         headless: input.headless ?? false,
         storage: storageFile({ target: mode, browser: input.browser }),
       })
-      if (node?.ok && node.text) return node.text
+      if (node?.ok && "text" in node && node.text) return node.text
       return [
         "No se pudo abrir el navegador con Playwright.",
         "Se intentó channel (chrome/msedge), fallback chromium y driver Node.",
@@ -320,7 +320,7 @@ export namespace Webchat {
     return text
   }
 
-  const findInput = async (page: Page, list: string[], timeout: number) => {
+  const findInput = async (page: Page, list: readonly string[], timeout: number) => {
     for (const item of list) {
       const ok = await page
         .waitForSelector(item, { timeout: Math.floor(timeout / Math.max(1, list.length)) })
@@ -330,7 +330,7 @@ export namespace Webchat {
     }
   }
 
-  const findOutput = async (page: Page, list: string[], timeout: number) => {
+  const findOutput = async (page: Page, list: readonly string[], timeout: number) => {
     for (const item of list) {
       const ok = await page
         .waitForSelector(item, { timeout: Math.floor(timeout / Math.max(1, list.length)) })
