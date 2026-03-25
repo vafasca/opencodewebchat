@@ -213,11 +213,10 @@ export namespace SessionPrompt {
     await SessionStatus.set(input.input.sessionID, { type: "busy" })
     await using _ = defer(() => SessionStatus.set(input.input.sessionID, { type: "idle" }))
     const cfg = await Config.get()
-    const txt = input.message.parts
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
-      .join("\n")
-      .trim()
+    const txt = await buildWebchatInput({
+      sessionID: input.input.sessionID,
+      message: input.message,
+    })
     log.info("prompt.webchat.start", {
       sessionID: input.input.sessionID,
       browser: input.input.webchat?.browser,
@@ -294,6 +293,41 @@ export namespace SessionPrompt {
       info: assistant,
       parts: await MessageV2.parts(assistant.id),
     }
+  }
+
+  async function buildWebchatInput(input: { sessionID: SessionID; message: MessageV2.WithParts }) {
+    const text = input.message.parts
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n")
+      .trim()
+    const msgs = await MessageV2.filterCompacted(MessageV2.stream(input.sessionID))
+    const user = msgs.findLast((msg) => msg.info.role === "user")
+    if (!user) return text
+    const model = await Provider.getModel(user.info.model.providerID, user.info.model.modelID).catch(() =>
+      Provider.defaultModel(),
+    )
+    const agent = await Agent.get(user.info.agent)
+    const skills = await SystemPrompt.skills(agent)
+    const system = [
+      ...(await SystemPrompt.environment(model)),
+      ...(skills ? [skills] : []),
+      ...(await InstructionPrompt.system()),
+    ]
+    const history = JSON.stringify(MessageV2.toModelMessages(msgs, model, { stripMedia: true }), null, 2)
+    return [
+      "You are running in browser webchat compatibility mode.",
+      "Follow the same rules and behavior defined below as if this were the normal API key model flow.",
+      "Use the latest user message from the history as the active request.",
+      "",
+      "<system>",
+      system.join("\n\n"),
+      "</system>",
+      "",
+      "<history>",
+      history,
+      "</history>",
+    ].join("\n")
   }
 
   export async function resolvePromptParts(template: string): Promise<PromptInput["parts"]> {
