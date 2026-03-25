@@ -295,18 +295,7 @@ export namespace SessionPrompt {
 
   const webchatPrompt = async (input: { input: PromptInput; message: MessageV2.WithParts }) => {
     const model = await Provider.getModel(input.message.info.model.providerID, input.message.info.model.modelID)
-    const agent = await Agent.get(input.message.info.agent)
     const msgs = await MessageV2.filterCompacted(MessageV2.stream(input.input.sessionID))
-    const env = await SystemPrompt.environment(model)
-    const skills = agent ? await SystemPrompt.skills(agent) : undefined
-    const inst = await InstructionPrompt.system()
-    const head = [
-      ...(agent?.prompt ? [agent.prompt] : [SystemPrompt.provider(model)]),
-      ...(input.input.system ? [input.input.system] : []),
-      ...(input.message.info.system ? [input.message.info.system] : []),
-    ]
-      .filter((item) => item)
-      .join("\n\n")
     const list = MessageV2.toModelMessages(msgs, model, { stripMedia: true })
     const chat = list
       .map((item) => {
@@ -331,19 +320,27 @@ export namespace SessionPrompt {
         return `${item.role.toUpperCase()}:\n${txt}`.trim()
       })
       .join("\n\n")
+    const user = list
+      .filter((item) => item.role === "user")
+      .at(-1)
+    const ask =
+      !user || typeof user.content === "string"
+        ? (typeof user?.content === "string" ? user.content : "")
+        : user.content
+            .map((part) => (part.type === "text" ? part.text : ""))
+            .filter((item) => item)
+            .join("\n")
     return [
-      "<SYSTEM>",
-      ...env,
-      ...(skills ? [skills] : []),
-      ...inst,
-      head,
-      "</SYSTEM>",
-      "",
-      "<CONVERSATION>",
+      "Contexto previo:",
       chat,
-      "</CONVERSATION>",
       "",
-      "Responde al último mensaje del usuario usando el mismo comportamiento del agente configurado.",
+      "Solicitud actual del usuario:",
+      ask,
+      "",
+      "Instrucciones:",
+      "- Responde como asistente de ingeniería de software.",
+      "- Si corresponde, usa flujo de trabajo completo: analizar, hacer preguntas si faltan datos y ejecutar acciones de archivos.",
+      "- Si creas o editas archivos, indica claramente la ruta y qué hiciste.",
     ]
       .filter((item) => item)
       .join("\n")
