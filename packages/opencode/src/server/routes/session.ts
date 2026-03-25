@@ -19,11 +19,57 @@ import { PermissionID } from "@/permission/schema"
 import { ModelID, ProviderID } from "@/provider/schema"
 import { errors } from "../error"
 import { lazy } from "../../util/lazy"
+import { Webchat } from "@/webchat"
 
 const log = Log.create({ service: "server" })
 
 export const SessionRoutes = lazy(() =>
   new Hono()
+    .post(
+      "/webchat/login",
+      validator(
+        "json",
+        z.object({
+          browser: z.enum(["chrome", "edge"]),
+          target: z.enum(["chatgpt", "claude"]),
+        }),
+      ),
+      async (c) => {
+        const body = c.req.valid("json")
+        const ok = await Webchat.loginOpen(body)
+        return c.json({ ok })
+      },
+    )
+    .post(
+      "/webchat/login/confirm",
+      validator(
+        "json",
+        z.object({
+          browser: z.enum(["chrome", "edge"]),
+          target: z.enum(["chatgpt", "claude"]),
+        }),
+      ),
+      async (c) => {
+        const body = c.req.valid("json")
+        const ok = await Webchat.loginConfirm(body)
+        return c.json({ ok })
+      },
+    )
+    .get(
+      "/webchat/login/status",
+      validator(
+        "query",
+        z.object({
+          browser: z.enum(["chrome", "edge"]),
+          target: z.enum(["chatgpt", "claude"]),
+        }),
+      ),
+      async (c) => {
+        const query = c.req.valid("query")
+        const result = await Webchat.loginStatus(query)
+        return c.json(result)
+      },
+    )
     .get(
       "/",
       describeRoute({
@@ -814,6 +860,12 @@ export const SessionRoutes = lazy(() =>
         return stream(c, async (stream) => {
           const sessionID = c.req.valid("param").sessionID
           const body = c.req.valid("json")
+          log.info("session.prompt.request", {
+            sessionID,
+            webchat: body.webchat?.enabled === true,
+            browser: body.webchat?.browser,
+            target: body.webchat?.target,
+          })
           const msg = await SessionPrompt.prompt({ ...body, sessionID })
           stream.write(JSON.stringify(msg))
         })
@@ -846,6 +898,12 @@ export const SessionRoutes = lazy(() =>
         return stream(c, async () => {
           const sessionID = c.req.valid("param").sessionID
           const body = c.req.valid("json")
+          log.info("session.prompt_async.request", {
+            sessionID,
+            webchat: body.webchat?.enabled === true,
+            browser: body.webchat?.browser,
+            target: body.webchat?.target,
+          })
           SessionPrompt.prompt({ ...body, sessionID })
         })
       },
