@@ -1057,6 +1057,81 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   })
 
   const variants = createMemo(() => ["default", ...local.model.variant.list()])
+  const [webchat, setWebchat] = createSignal(false)
+  const [browser, setBrowser] = createSignal<"chrome" | "edge">("chrome")
+  const [target, setTarget] = createSignal<"chatgpt" | "claude">("chatgpt")
+  const [saved, setSaved] = createSignal(false)
+  const [active, setActive] = createSignal(false)
+  const headers = () => ({ "Content-Type": "application/json", "x-opencode-directory": sdk.directory })
+  const callWebchat = async (path: string, init?: RequestInit) => {
+    const list = [new URL(path, sdk.url).toString(), new URL(path, "http://127.0.0.1:4096").toString()]
+    for (const item of [...new Set(list)]) {
+      console.info("[webchat] request", { url: item, method: init?.method ?? "GET" })
+      const res = await fetch(item, {
+        ...init,
+        headers: { ...headers(), ...(init?.headers ?? {}) },
+      }).catch((err) => {
+        console.warn("[webchat] request failed", { url: item, err })
+        return undefined
+      })
+      if (!res) continue
+      if (!res.ok) {
+        console.warn("[webchat] response not ok", { url: item, status: res.status })
+        continue
+      }
+      return res
+    }
+  }
+  const checkLogin = async () => {
+    const query = new URLSearchParams({ browser: browser(), target: target() }).toString()
+    const result = await callWebchat(`/session/webchat/login/status?${query}`)
+      .then((x) => x.json() as Promise<{ saved?: boolean; active?: boolean }>)
+      .catch(() => ({}))
+    setSaved(result.saved === true)
+    setActive(result.active === true)
+    console.info("[webchat] status", { saved: result.saved === true, active: result.active === true })
+  }
+  const openLogin = async () => {
+    console.info("[webchat] login open click", { browser: browser(), target: target() })
+    const res = await callWebchat("/session/webchat/login", {
+      method: "POST",
+      body: JSON.stringify({ browser: browser(), target: target() }),
+    }).catch(() => undefined)
+    const result = await res?.clone().json().catch(() => undefined)
+    console.info("[webchat] login open result", result)
+    await checkLogin()
+  }
+  const confirmLogin = async () => {
+    console.info("[webchat] login confirm click", { browser: browser(), target: target() })
+    const res = await callWebchat("/session/webchat/login/confirm", {
+      method: "POST",
+      body: JSON.stringify({ browser: browser(), target: target() }),
+    }).catch(() => undefined)
+    const result = await res?.clone().json().catch(() => undefined)
+    console.info("[webchat] login confirm result", result)
+    await checkLogin()
+  }
+  const toggleWebchat = () => {
+    const next = !webchat()
+    console.info("[webchat] toggle", { enabled: next, browser: browser(), target: target() })
+    setWebchat(next)
+  }
+  const toggleBrowser = () => {
+    const next = browser() === "chrome" ? "edge" : "chrome"
+    console.info("[webchat] browser", { browser: next })
+    setBrowser(next)
+    checkLogin()
+  }
+  const toggleTarget = () => {
+    const next = target() === "chatgpt" ? "claude" : "chatgpt"
+    console.info("[webchat] target", { target: next })
+    setTarget(next)
+    checkLogin()
+  }
+  createEffect(() => {
+    if (!webchat()) return
+    checkLogin()
+  })
   const accepting = createMemo(() => {
     const id = params.id
     if (!id) return permission.isAutoAcceptingDirectory(sdk.directory)
@@ -1096,6 +1171,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     onQueue: props.onQueue,
     onAbort: props.onAbort,
     onSubmit: props.onSubmit,
+    webchatEnabled: webchat,
+    webchatBrowser: browser,
+    webchatTarget: target,
   })
 
   const handleKeyDown = (event: KeyboardEvent) => {
@@ -1478,23 +1556,132 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                   </TooltipKeybind>
                 </div>
                 <div data-component="prompt-model-control">
-                  <Show
-                    when={providers.paid().length > 0}
-                    fallback={
+                  <Tooltip placement="top" value="Enable browser webchat mode (no API key model required)">
+                    <Button
+                      data-action="prompt-webchat"
+                      type="button"
+                      variant={webchat() ? "secondary" : "ghost"}
+                      size="normal"
+                      class="min-w-0 text-13-regular text-text-base"
+                      style={control()}
+                      onClick={toggleWebchat}
+                    >
+                      Webchat
+                    </Button>
+                  </Tooltip>
+                  <Show when={webchat()}>
+                    <div class="flex items-center gap-1">
+                      <button
+                        type="button"
+                        class="h-2 w-2 rounded-full"
+                        style={{ "background-color": saved() ? "var(--color-icon-success-base)" : "var(--color-icon-warning-base)" }}
+                        title={saved() ? "Webchat login guardado" : "Webchat sin login guardado"}
+                      />
+                      <Button
+                        data-action="prompt-webchat-login"
+                        type="button"
+                        variant="ghost"
+                        size="normal"
+                        class="min-w-0 text-13-regular text-text-base uppercase"
+                        style={control()}
+                        onClick={openLogin}
+                      >
+                        Login
+                      </Button>
+                      <Button
+                        data-action="prompt-webchat-login-confirm"
+                        type="button"
+                        variant="ghost"
+                        size="normal"
+                        class="min-w-0 text-13-regular text-text-base uppercase"
+                        style={control()}
+                        onClick={confirmLogin}
+                        disabled={!active()}
+                      >
+                        Guardar
+                      </Button>
+                    </div>
+                  </Show>
+                  <Show when={webchat()}>
+                    <Tooltip placement="top" value="Switch target chat (ChatGPT/Claude)">
+                      <Button
+                        data-action="prompt-webchat-target"
+                        type="button"
+                        variant="ghost"
+                        size="normal"
+                        class="min-w-0 text-13-regular text-text-base uppercase"
+                        style={control()}
+                        onClick={toggleTarget}
+                      >
+                        {target()}
+                      </Button>
+                    </Tooltip>
+                  </Show>
+                  <Show when={webchat()}>
+                    <Tooltip placement="top" value="Switch browser channel for webchat">
+                      <Button
+                        data-action="prompt-webchat-browser"
+                        type="button"
+                        variant="ghost"
+                        size="normal"
+                        class="min-w-0 text-13-regular text-text-base uppercase"
+                        style={control()}
+                        onClick={toggleBrowser}
+                      >
+                        {browser()}
+                      </Button>
+                    </Tooltip>
+                  </Show>
+                  <Show when={!webchat()}>
+                    <Show
+                      when={providers.paid().length > 0}
+                      fallback={
+                        <TooltipKeybind
+                          placement="top"
+                          gutter={4}
+                          title={language.t("command.model.choose")}
+                          keybind={command.keybind("model.choose")}
+                        >
+                          <Button
+                            data-action="prompt-model"
+                            as="div"
+                            variant="ghost"
+                            size="normal"
+                            class="min-w-0 max-w-[320px] text-13-regular text-text-base group"
+                            style={control()}
+                            onClick={() => dialog.show(() => <DialogSelectModelUnpaid model={local.model} />)}
+                          >
+                            <Show when={local.model.current()?.provider?.id}>
+                              <ProviderIcon
+                                id={local.model.current()!.provider.id}
+                                class="size-4 shrink-0 opacity-40 group-hover:opacity-100 transition-opacity duration-150"
+                                style={{ "will-change": "opacity", transform: "translateZ(0)" }}
+                              />
+                            </Show>
+                            <span class="truncate">
+                              {local.model.current()?.name ?? language.t("dialog.model.select.title")}
+                            </span>
+                            <Icon name="chevron-down" size="small" class="shrink-0" />
+                          </Button>
+                        </TooltipKeybind>
+                      }
+                    >
                       <TooltipKeybind
                         placement="top"
                         gutter={4}
                         title={language.t("command.model.choose")}
                         keybind={command.keybind("model.choose")}
                       >
-                        <Button
-                          data-action="prompt-model"
-                          as="div"
-                          variant="ghost"
-                          size="normal"
-                          class="min-w-0 max-w-[320px] text-13-regular text-text-base group"
-                          style={control()}
-                          onClick={() => dialog.show(() => <DialogSelectModelUnpaid model={local.model} />)}
+                        <ModelSelectorPopover
+                          model={local.model}
+                          triggerAs={Button}
+                          triggerProps={{
+                            variant: "ghost",
+                            size: "normal",
+                            style: control(),
+                            class: "min-w-0 max-w-[320px] text-13-regular text-text-base group",
+                            "data-action": "prompt-model",
+                          }}
                         >
                           <Show when={local.model.current()?.provider?.id}>
                             <ProviderIcon
@@ -1507,8 +1694,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                             {local.model.current()?.name ?? language.t("dialog.model.select.title")}
                           </span>
                           <Icon name="chevron-down" size="small" class="shrink-0" />
-                        </Button>
+                        </ModelSelectorPopover>
                       </TooltipKeybind>
+<<<<<<< HEAD
                     }
                   >
                     <TooltipKeybind
@@ -1541,9 +1729,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                         <Icon name="chevron-down" size="small" class="shrink-0" />
                       </ModelSelectorPopover>
                     </TooltipKeybind>
+=======
+                    </Show>
+>>>>>>> 86ff4dbca1f193b9c9638322eb0faacb3ea2710a
                   </Show>
                 </div>
-                <div data-component="prompt-variant-control">
+                <Show when={!webchat()}>
+                  <div data-component="prompt-variant-control">
                   <TooltipKeybind
                     placement="top"
                     gutter={4}
@@ -1563,7 +1755,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                       variant="ghost"
                     />
                   </TooltipKeybind>
-                </div>
+                  </div>
+                </Show>
                 <TooltipKeybind
                   placement="top"
                   gutter={8}
