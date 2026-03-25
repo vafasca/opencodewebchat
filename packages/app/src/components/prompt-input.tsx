@@ -572,7 +572,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       const open = recent()
       const seen = new Set(open)
       const pinned: AtOption[] = open.map((path) => ({ type: "file", path, display: path, recent: true }))
-      if (!query.trim()) return [...agents, ...pinned]
       const paths = await files.searchFilesAndDirectories(query)
       const fileOptions: AtOption[] = paths
         .filter((path) => !seen.has(path))
@@ -1044,7 +1043,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     return true
   }
 
-  const { addAttachments, removeAttachment, handlePaste } = createPromptAttachments({
+  const { addAttachment, removeAttachment, handlePaste } = createPromptAttachments({
     editor: () => editorRef,
     isDialogActive: () => !!dialog.active,
     setDraggingType: (type) => setStore("draggingType", type),
@@ -1085,8 +1084,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const checkLogin = async () => {
     const query = new URLSearchParams({ browser: browser(), target: target() }).toString()
     const result = await callWebchat(`/session/webchat/login/status?${query}`)
-      .then((x) => x.json() as Promise<{ saved?: boolean; active?: boolean }>)
-      .catch(() => ({}))
+      .then((x) => x!.json() as Promise<{ saved?: boolean; active?: boolean }>)
+      .catch(() => ({} as { saved?: boolean; active?: boolean }))
     setSaved(result.saved === true)
     setActive(result.active === true)
     console.info("[webchat] status", { saved: result.saved === true, active: result.active === true })
@@ -1467,7 +1466,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
               class="hidden"
               onChange={(e) => {
                 const list = e.currentTarget.files
-                if (list) void addAttachments(Array.from(list))
+                if (list) {
+                  for (const file of Array.from(list)) {
+                    void addAttachment(file)
+                  }
+                }
                 e.currentTarget.value = ""
               }}
             />
@@ -1685,7 +1688,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                         >
                           <Show when={local.model.current()?.provider?.id}>
                             <ProviderIcon
-                              id={local.model.current()?.provider?.id ?? ""}
+                              id={local.model.current()!.provider.id}
                               class="size-4 shrink-0 opacity-40 group-hover:opacity-100 transition-opacity duration-150"
                               style={{ "will-change": "opacity", transform: "translateZ(0)" }}
                             />
@@ -1696,42 +1699,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                           <Icon name="chevron-down" size="small" class="shrink-0" />
                         </ModelSelectorPopover>
                       </TooltipKeybind>
-<<<<<<< HEAD
-                    }
-                  >
-                    <TooltipKeybind
-                      placement="top"
-                      gutter={4}
-                      title={language.t("command.model.choose")}
-                      keybind={command.keybind("model.choose")}
-                    >
-                      <ModelSelectorPopover
-                        model={local.model}
-                        triggerAs={Button}
-                        triggerProps={{
-                          variant: "ghost",
-                          size: "normal",
-                          style: control(),
-                          class: "min-w-0 max-w-[320px] text-13-regular text-text-base group",
-                          "data-action": "prompt-model",
-                        }}
-                      >
-                        <Show when={local.model.current()?.provider?.id}>
-                          <ProviderIcon
-                            id={local.model.current()?.provider?.id ?? ""}
-                            class="size-4 shrink-0 opacity-40 group-hover:opacity-100 transition-opacity duration-150"
-                            style={{ "will-change": "opacity", transform: "translateZ(0)" }}
-                          />
-                        </Show>
-                        <span class="truncate">
-                          {local.model.current()?.name ?? language.t("dialog.model.select.title")}
-                        </span>
-                        <Icon name="chevron-down" size="small" class="shrink-0" />
-                      </ModelSelectorPopover>
-                    </TooltipKeybind>
-=======
                     </Show>
->>>>>>> 86ff4dbca1f193b9c9638322eb0faacb3ea2710a
                   </Show>
                 </div>
                 <Show when={!webchat()}>
