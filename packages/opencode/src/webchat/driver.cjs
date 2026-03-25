@@ -8,11 +8,15 @@ const pathUtil = require("path")
 const target = {
   chatgpt: {
     url: "https://chatgpt.com/",
-    input: ["textarea", "#prompt-textarea"],
+    input: ["textarea", "#prompt-textarea", "div#prompt-textarea", "div#prompt-textarea[contenteditable='true']"],
     output: [
       "[data-message-author-role='assistant']",
+      "div[data-message-author-role='assistant']",
       "article[data-testid='conversation-turn']",
       "article[data-testid^='conversation-turn-']",
+      "div[data-testid='conversation-turn-assistant']",
+      "[data-testid^='conversation-turn-'] [data-message-author-role='assistant']",
+      "main [data-message-author-role='assistant']",
       "div[data-testid='assistant-turn']",
       "main article",
     ],
@@ -77,12 +81,31 @@ const send = async (page, input, txt, mode) => {
     }, txt)
     .catch(() => false)
   if (!stuck) return
+  await page.keyboard.press("Control+Enter").catch(() => undefined)
+  await page.keyboard.press("Meta+Enter").catch(() => undefined)
+  await page.waitForTimeout(700)
+  const sentByHotkey = await page
+    .locator(input)
+    .evaluate((el, expected) => {
+      if (el instanceof HTMLTextAreaElement) return !el.value.includes(expected)
+      const val = el.textContent || ""
+      return !val.includes(expected)
+    }, txt)
+    .catch(() => false)
+  if (sentByHotkey) return
   const list =
     mode === "chatgpt"
       ? [
+          "#composer-submit-button",
+          ".composer-submit-button-color",
+          "button.composer-submit-button-color",
+          "button[data-testid='composer-send-button']",
+          "button[data-testid='composer-submit-button']",
           "button[data-testid='fruitjuice-send-button']",
           "button[data-testid='send-button']",
           "button[data-testid*='send']",
+          "button[aria-label*='Submit']",
+          "button[aria-label*='Enviar mensaje']",
           "button[aria-label*='Send']",
           "button[aria-label*='Enviar']",
           "button[aria-label*='send']",
@@ -91,7 +114,11 @@ const send = async (page, input, txt, mode) => {
           "form button[type='submit']",
         ]
       : [
+          "#composer-submit-button",
+          ".composer-submit-button-color",
+          "button.composer-submit-button-color",
           "button[data-testid*='send']",
+          "button[data-testid='composer-send-button']",
           "button[aria-label*='Send']",
           "button[aria-label*='Enviar']",
           "button[aria-label*='send']",
@@ -100,14 +127,75 @@ const send = async (page, input, txt, mode) => {
         ]
   for (const item of list) {
     const ok = await page
-      .locator(item)
+      .locator(input)
       .first()
-      .click({ timeout: 1500 })
+      .evaluate((el, sel) => {
+        const root = el.closest("form") || document
+        const pick = root.querySelector(sel)
+        if (!(pick instanceof HTMLElement)) return false
+        const style = window.getComputedStyle(pick)
+        if (style.display === "none" || style.visibility === "hidden") return false
+        if (pick instanceof HTMLButtonElement && pick.disabled) return false
+        pick.click()
+        return true
+      }, item)
       .then(() => true)
       .catch(() => false)
-    if (!ok) continue
-    return
+    if (!ok) {
+      const alt = await page
+        .locator(item)
+        .first()
+        .click({ timeout: 2500 })
+        .then(() => true)
+        .catch(() => false)
+      if (!alt) continue
+    }
+    await page.waitForTimeout(500)
+    const sent = await page
+      .locator(input)
+      .evaluate((el, expected) => {
+        if (el instanceof HTMLTextAreaElement) return !el.value.includes(expected)
+        const val = el.textContent || ""
+        return !val.includes(expected)
+      }, txt)
+      .catch(() => false)
+    if (sent) return
   }
+  const forced = await ensureSend(page, input)
+  if (forced) {
+    await page.waitForTimeout(700)
+    const sent = await page
+      .locator(input)
+      .evaluate((el, expected) => {
+        if (el instanceof HTMLTextAreaElement) return !el.value.includes(expected)
+        const val = el.textContent || ""
+        return !val.includes(expected)
+      }, txt)
+      .catch(() => false)
+    if (sent) return
+  }
+  for (const item of outputsFromMode(mode)) {
+    const ok = await page
+      .waitForSelector(item, { timeout: 1200 })
+      .then(() => true)
+      .catch(() => false)
+    if (ok) return
+  }
+}
+
+const outputsFromMode = (mode) =>
+  mode === "chatgpt"
+    ? [
+        "[data-message-author-role='assistant']",
+        "div[data-message-author-role='assistant']",
+        "article[data-testid='conversation-turn']",
+        "article[data-testid^='conversation-turn-']",
+        "div[data-testid='conversation-turn-assistant']",
+        "[data-testid^='conversation-turn-'] [data-message-author-role='assistant']",
+        "main [data-message-author-role='assistant']",
+      ]
+    : ["div[data-is-streaming]", "div.font-claude-message", "div[data-testid='message-content']"]
+const ensureSend = async (page, input) => {
   const btn = await page
     .locator(input)
     .first()
@@ -135,8 +223,8 @@ const send = async (page, input, txt, mode) => {
       return true
     })
     .catch(() => false)
-  if (btn) return
-  await page
+  if (btn) return true
+  const submit = await page
     .locator(input)
     .first()
     .evaluate((el) => {
@@ -149,6 +237,7 @@ const send = async (page, input, txt, mode) => {
       return false
     })
     .catch(() => false)
+  return submit
 }
 
 const loginRequired = async (page, mode) => {
