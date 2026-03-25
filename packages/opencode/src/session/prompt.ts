@@ -219,7 +219,7 @@ export namespace SessionPrompt {
       browser: input.input.webchat?.browser,
       hasText: txt.length > 0,
     })
-    const content = await Webchat.run({
+    const raw = await Webchat.run({
       prompt: txt,
       browser: input.input.webchat?.browser ?? cfg.webchat?.browser ?? "chrome",
       target: input.input.webchat?.target ?? cfg.webchat?.target ?? "chatgpt",
@@ -247,6 +247,15 @@ export namespace SessionPrompt {
         "Prueba: bunx playwright install",
       ].join("\n")
     })
+    const save = await webchatSave(raw)
+    const content = save.length
+      ? [
+          raw,
+          "",
+          "Archivos creados automáticamente:",
+          ...save.map((item) => `- ${item}`),
+        ].join("\n")
+      : raw
     const model =
       input.message.info.role === "assistant" ? input.message.info.mode : await lastModel(input.input.sessionID)
     const assistant = (await Session.updateMessage({
@@ -297,29 +306,6 @@ export namespace SessionPrompt {
     const model = await Provider.getModel(input.message.info.model.providerID, input.message.info.model.modelID)
     const msgs = await MessageV2.filterCompacted(MessageV2.stream(input.input.sessionID))
     const list = MessageV2.toModelMessages(msgs, model, { stripMedia: true })
-    const chat = list
-      .map((item) => {
-        const txt =
-          typeof item.content === "string"
-            ? item.content
-            : item.content
-                .map((part) => {
-                  if (part.type === "text") return part.text
-                  if (part.type === "reasoning") return part.text
-                  if (part.type.startsWith("tool-")) {
-                    if (part.state === "input-available") return `[tool:${part.type} input]`
-                    if (part.state === "output-available")
-                      return `[tool:${part.type} output]\n${typeof part.output === "string" ? part.output : JSON.stringify(part.output)}`
-                    return `[tool:${part.type} error]\n${part.errorText}`
-                  }
-                  if (part.type === "step-start") return "[step-start]"
-                  return ""
-                })
-                .filter((item) => item)
-                .join("\n")
-        return `${item.role.toUpperCase()}:\n${txt}`.trim()
-      })
-      .join("\n\n")
     const user = list
       .filter((item) => item.role === "user")
       .at(-1)
@@ -331,20 +317,40 @@ export namespace SessionPrompt {
             .filter((item) => item)
             .join("\n")
     return [
-      "Contexto previo:",
-      chat,
-      "",
-      "Solicitud actual del usuario:",
+      "Solicitud del usuario:",
       ask,
       "",
       "Instrucciones:",
-      "- Responde como asistente de ingeniería de software.",
-      "- Si corresponde, usa flujo de trabajo completo: analizar, hacer preguntas si faltan datos y ejecutar acciones de archivos.",
-      "- Si creas o editas archivos, indica claramente la ruta y qué hiciste.",
+      "- Actúa como asistente de ingeniería de software enfocado en ejecutar, no en explicar de más.",
+      "- Evita saludos largos o plantillas; entrega directamente el resultado.",
+      "- Si falta un dato crítico, haz una sola pregunta breve. Si no falta, procede.",
+      "- Si creas o editas archivos, indica rutas exactas y qué hiciste.",
     ]
       .filter((item) => item)
       .join("\n")
       .trim()
+  }
+
+  const webchatSave = async (txt: string) => {
+    const out: string[] = []
+    const set = new Set<string>()
+    const list = [...txt.matchAll(/(?:ruta|path|archivo|file)\s*:\s*([^\n`]+?)\s*\n```[\w-]*\n([\s\S]*?)```/gi)]
+    for (const item of list) {
+      const raw = item[1]?.trim()
+      const body = item[2] ?? ""
+      if (!raw || !body.trim()) continue
+      const clean = raw.replace(/^["'`]|["'`]$/g, "")
+      const norm = clean.replace(/\\/g, "/")
+      const rel = norm.includes(":/") ? path.basename(norm) : norm.replace(/^\/+/, "")
+      if (!rel || rel === "." || rel === "..") continue
+      const file = path.resolve(Instance.directory, rel)
+      if (!Filesystem.contains(Instance.directory, file)) continue
+      if (set.has(file)) continue
+      set.add(file)
+      await Filesystem.write(file, body)
+      out.push(path.relative(Instance.directory, file) || path.basename(file))
+    }
+    return out
   }
 
   export async function resolvePromptParts(template: string): Promise<PromptInput["parts"]> {

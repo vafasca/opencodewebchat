@@ -9,6 +9,7 @@ import os from "os"
 export namespace Webchat {
   const log = Log.create({ service: "webchat" })
   const login = new Map<string, { browser: Browser; context: BrowserContext }>()
+  const live = new Map<string, { browser: Browser; context: BrowserContext; page: Page; mode: "chatgpt" | "claude" }>()
 
   export const DEFAULT_URL = "https://chatgpt.com/"
 
@@ -196,43 +197,66 @@ export namespace Webchat {
     if (!playwright) {
       return "No se pudo cargar Playwright. Instala dependencias y ejecuta: bunx playwright install"
     }
-    const browser = await playwright.chromium
-      .launch({
-        channel,
-        headless: input.headless ?? false,
-      })
-      .catch(async (err) => {
-        const txt = err instanceof Error ? err.message : String(err)
-        log.error("webchat.run.launch_failed", { error: txt, channel })
-        log.warn("webchat.run.launch_fallback", {
-          note: "retrying with bundled chromium executable and no channel",
+    const key = `${mode}:${input.browser}:${input.headless ? "headless" : "headed"}`
+    const old = live.get(key)
+    const pick =
+      old &&
+      !old.page.isClosed() &&
+      old.mode === mode &&
+      old.browser.isConnected() &&
+      (await old.context.pages().then((item) => item.length > 0).catch(() => false))
+        ? old
+        : undefined
+    const item =
+      pick ??
+      (await (async () => {
+        const browser = await playwright.chromium
+          .launch({
+            channel,
+            headless: input.headless ?? false,
+          })
+          .catch(async (err) => {
+            const txt = err instanceof Error ? err.message : String(err)
+            log.error("webchat.run.launch_failed", { error: txt, channel })
+            log.warn("webchat.run.launch_fallback", {
+              note: "retrying with bundled chromium executable and no channel",
+            })
+            const retry = await playwright.chromium
+              .launch({
+                headless: input.headless ?? false,
+              })
+              .catch((retryErr) => {
+                const retryTxt = retryErr instanceof Error ? retryErr.message : String(retryErr)
+                log.error("webchat.run.launch_fallback_failed", { error: retryTxt })
+                return undefined
+              })
+            if (retry) return retry
+            const bin = pickPath(input.browser)
+            if (!bin) return undefined
+            log.warn("webchat.run.launch_executable_path", { bin })
+            const last = await playwright.chromium
+              .launch({
+                executablePath: bin,
+                headless: input.headless ?? false,
+              })
+              .catch((lastErr) => {
+                const lastTxt = lastErr instanceof Error ? lastErr.message : String(lastErr)
+                log.error("webchat.run.launch_executable_failed", { error: lastTxt, bin })
+                return undefined
+              })
+            return last
+          })
+        if (!browser) return
+        const file = storageFile({ target: mode, browser: input.browser })
+        const context = await browser.newContext({
+          ...(existsSync(file) ? { storageState: file } : {}),
         })
-        const retry = await playwright.chromium
-          .launch({
-            headless: input.headless ?? false,
-          })
-          .catch((retryErr) => {
-            const retryTxt = retryErr instanceof Error ? retryErr.message : String(retryErr)
-            log.error("webchat.run.launch_fallback_failed", { error: retryTxt })
-            return undefined
-          })
-        if (retry) return retry
-        const bin = pickPath(input.browser)
-        if (!bin) return undefined
-        log.warn("webchat.run.launch_executable_path", { bin })
-        const last = await playwright.chromium
-          .launch({
-            executablePath: bin,
-            headless: input.headless ?? false,
-          })
-          .catch((lastErr) => {
-            const lastTxt = lastErr instanceof Error ? lastErr.message : String(lastErr)
-            log.error("webchat.run.launch_executable_failed", { error: lastTxt, bin })
-            return undefined
-          })
-        return last
-      })
-    if (!browser) {
+        const page = await context.newPage()
+        const item = { browser, context, page, mode }
+        live.set(key, item)
+        return item
+      })())
+    if (!item) {
       const node = await nodeRun({
         browser: input.browser,
         target: mode,
@@ -252,19 +276,15 @@ export namespace Webchat {
         `Detalle: ${node?.error ?? "sin detalle"}`,
       ].join(" ")
     }
-    const file = storageFile({ target: mode, browser: input.browser })
-    const ctx = await browser.newContext({
-      ...(existsSync(file) ? { storageState: file } : {}),
-    })
-    const page = await ctx.newPage()
-    await page.goto(url, {
-      waitUntil: "domcontentloaded",
-      timeout,
-    })
+    const page = item.page
+    if (page.url() === "about:blank" || !page.url().startsWith("http")) {
+      await page.goto(url, {
+        waitUntil: "domcontentloaded",
+        timeout,
+      })
+    }
     const gate = await loginRequired(page, mode)
     if (gate) {
-      await ctx.close().catch(() => undefined)
-      await browser.close().catch(() => undefined)
       return gate
     }
     log.info("webchat.run.ready")
@@ -272,8 +292,6 @@ export namespace Webchat {
     if (!inputSel) {
       const msg = "No se encontró el input del chat. Verifica login, target y selector."
       log.error("webchat.run.input_missing", { target: mode, inputs })
-      await ctx.close().catch(() => undefined)
-      await browser.close().catch(() => undefined)
       return msg
     }
     log.info("webchat.run.input_found", { input: inputSel })
@@ -283,8 +301,6 @@ export namespace Webchat {
     if (!responseSel) {
       const msg = "No se detectó respuesta del chat. Revisa autenticación y selectores."
       log.error("webchat.run.output_missing", { target: mode, outputs })
-      await ctx.close().catch(() => undefined)
-      await browser.close().catch(() => undefined)
       return msg
     }
     log.info("webchat.run.output_found", { output: responseSel })
@@ -312,8 +328,6 @@ export namespace Webchat {
       await page.waitForTimeout(500)
     }
 
-    await ctx.close().catch(() => undefined)
-    await browser.close().catch(() => undefined)
     log.info("webchat.run.done", {
       size: text.length,
     })
