@@ -19,6 +19,9 @@ export namespace Webchat {
       response: [
         "[data-message-author-role='assistant']",
         "article[data-testid='conversation-turn']",
+        "article[data-testid^='conversation-turn-']",
+        "div[data-testid='assistant-turn']",
+        "main article",
       ],
     },
     claude: {
@@ -389,6 +392,37 @@ export namespace Webchat {
       .evaluate((el) => {
         const form = el.closest("form")
         if (!form) return false
+        const list = [...form.querySelectorAll("button")]
+        const ok = list.filter((item) => {
+          if (!(item instanceof HTMLButtonElement)) return false
+          if (item.disabled) return false
+          const style = window.getComputedStyle(item)
+          if (style.display === "none" || style.visibility === "hidden") return false
+          const key = [
+            item.getAttribute("aria-label") ?? "",
+            item.getAttribute("data-testid") ?? "",
+            item.textContent ?? "",
+          ]
+            .join(" ")
+            .toLowerCase()
+          return key.includes("send") || key.includes("enviar")
+        })
+        const pick = ok.at(0) ?? list.at(-1)
+        if (!(pick instanceof HTMLButtonElement)) return false
+        pick.click()
+        return true
+      })
+      .catch(() => false)
+    if (form) {
+      log.warn("webchat.run.send_button_fallback")
+      return
+    }
+    const submit = await page
+      .locator(input)
+      .first()
+      .evaluate((el) => {
+        const form = el.closest("form")
+        if (!form) return false
         if ("requestSubmit" in form) {
           ;(form as HTMLFormElement).requestSubmit()
           return true
@@ -396,7 +430,7 @@ export namespace Webchat {
         return false
       })
       .catch(() => false)
-    if (form) {
+    if (submit) {
       log.warn("webchat.run.send_form_submit_fallback")
       return
     }

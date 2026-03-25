@@ -9,7 +9,13 @@ const target = {
   chatgpt: {
     url: "https://chatgpt.com/",
     input: ["textarea", "#prompt-textarea"],
-    output: ["[data-message-author-role='assistant']", "article[data-testid='conversation-turn']"],
+    output: [
+      "[data-message-author-role='assistant']",
+      "article[data-testid='conversation-turn']",
+      "article[data-testid^='conversation-turn-']",
+      "div[data-testid='assistant-turn']",
+      "main article",
+    ],
   },
   claude: {
     url: "https://claude.ai/new",
@@ -102,6 +108,34 @@ const send = async (page, input, txt, mode) => {
     if (!ok) continue
     return
   }
+  const btn = await page
+    .locator(input)
+    .first()
+    .evaluate((el) => {
+      const form = el.closest("form")
+      if (!form) return false
+      const list = [...form.querySelectorAll("button")]
+      const ok = list.filter((item) => {
+        if (!(item instanceof HTMLButtonElement)) return false
+        if (item.disabled) return false
+        const style = window.getComputedStyle(item)
+        if (style.display === "none" || style.visibility === "hidden") return false
+        const key = [
+          item.getAttribute("aria-label") || "",
+          item.getAttribute("data-testid") || "",
+          item.textContent || "",
+        ]
+          .join(" ")
+          .toLowerCase()
+        return key.includes("send") || key.includes("enviar")
+      })
+      const pick = ok[0] || list.at(-1)
+      if (!(pick instanceof HTMLButtonElement)) return false
+      pick.click()
+      return true
+    })
+    .catch(() => false)
+  if (btn) return
   await page
     .locator(input)
     .first()
