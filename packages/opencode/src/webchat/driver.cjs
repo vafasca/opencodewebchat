@@ -2,6 +2,7 @@ const { chromium } = require("playwright")
 const { existsSync } = require("fs")
 const { mkdir } = require("fs/promises")
 const { writeFile } = require("fs/promises")
+const { rm } = require("fs/promises")
 const pathUtil = require("path")
 
 const target = {
@@ -73,13 +74,24 @@ const send = async (page, input, txt, mode) => {
   const list =
     mode === "chatgpt"
       ? [
+          "button[data-testid='fruitjuice-send-button']",
           "button[data-testid='send-button']",
+          "button[data-testid*='send']",
           "button[aria-label*='Send']",
           "button[aria-label*='Enviar']",
+          "button[aria-label*='send']",
           "button[aria-label*='mensaje']",
+          "button:has-text('Enviar')",
           "form button[type='submit']",
         ]
-      : ["button[aria-label*='Send']", "button[aria-label*='Enviar']", "form button[type='submit']"]
+      : [
+          "button[data-testid*='send']",
+          "button[aria-label*='Send']",
+          "button[aria-label*='Enviar']",
+          "button[aria-label*='send']",
+          "button:has-text('Enviar')",
+          "form button[type='submit']",
+        ]
   for (const item of list) {
     const ok = await page
       .locator(item)
@@ -90,6 +102,19 @@ const send = async (page, input, txt, mode) => {
     if (!ok) continue
     return
   }
+  await page
+    .locator(input)
+    .first()
+    .evaluate((el) => {
+      const form = el.closest("form")
+      if (!form) return false
+      if ("requestSubmit" in form) {
+        form.requestSubmit()
+        return true
+      }
+      return false
+    })
+    .catch(() => false)
 }
 
 const loginRequired = async (page, mode) => {
@@ -119,7 +144,7 @@ const run = async () => {
     const channel = data.browser === "edge" ? "msedge" : "chrome"
     const opts = {
       headless: false,
-      args: ["--start-maximized", "--disable-blink-features=AutomationControlled"],
+      args: ["--start-maximized"],
     }
     let browser = await chromium.launch({ channel, ...opts }).catch(() => undefined)
     if (!browser) browser = await chromium.launch({ ...opts }).catch(() => undefined)
@@ -145,6 +170,7 @@ const run = async () => {
     }
     const end = async () => {
       await save()
+      if (data.pidpath) await rm(data.pidpath).catch(() => undefined)
       await ctx.close().catch(() => undefined)
       await browser.close().catch(() => undefined)
       process.exit(0)

@@ -2,7 +2,7 @@ import { Log } from "@/util/log"
 import type { Browser, BrowserContext, Page } from "playwright"
 import { existsSync } from "fs"
 import { fileURLToPath } from "url"
-import { mkdir } from "fs/promises"
+import { mkdir, rm } from "fs/promises"
 import pathUtil from "path"
 import os from "os"
 
@@ -354,13 +354,24 @@ export namespace Webchat {
     const list =
       mode === "chatgpt"
         ? [
+            "button[data-testid='fruitjuice-send-button']",
             "button[data-testid='send-button']",
+            "button[data-testid*='send']",
             "button[aria-label*='Send']",
             "button[aria-label*='Enviar']",
+            "button[aria-label*='send']",
             "button[aria-label*='mensaje']",
+            "button:has-text('Enviar')",
             "form button[type='submit']",
           ]
-        : ["button[aria-label*='Send']", "button[aria-label*='Enviar']", "form button[type='submit']"]
+        : [
+            "button[data-testid*='send']",
+            "button[aria-label*='Send']",
+            "button[aria-label*='Enviar']",
+            "button[aria-label*='send']",
+            "button:has-text('Enviar')",
+            "form button[type='submit']",
+          ]
     for (const item of list) {
       const ok = await page
         .locator(item)
@@ -370,6 +381,23 @@ export namespace Webchat {
         .catch(() => false)
       if (!ok) continue
       log.warn("webchat.run.send_click_fallback", { selector: item })
+      return
+    }
+    const form = await page
+      .locator(input)
+      .first()
+      .evaluate((el) => {
+        const form = el.closest("form")
+        if (!form) return false
+        if ("requestSubmit" in form) {
+          ;(form as HTMLFormElement).requestSubmit()
+          return true
+        }
+        return false
+      })
+      .catch(() => false)
+    if (form) {
+      log.warn("webchat.run.send_form_submit_fallback")
       return
     }
     log.warn("webchat.run.send_fallback_failed")
@@ -448,7 +476,10 @@ export namespace Webchat {
     const pidpath = pidFile(input)
     const raw = await Bun.file(pidpath).text().catch(() => "")
     const pid = Number(raw.trim())
-    if (Number.isFinite(pid) && pid > 0) kill(pid)
+    if (Number.isFinite(pid) && pid > 0 && alive(pid)) {
+      log.info("webchat.login.open.node_driver.reuse", { browser: input.browser, target: input.target, pid })
+      return true
+    }
     await mkdir(pathUtil.dirname(pidpath), { recursive: true })
     const proc = Bun.spawn(["node", file], {
       stdin: "pipe",
@@ -456,6 +487,7 @@ export namespace Webchat {
       stderr: "ignore",
       detached: true,
     })
+    await Bun.write(pidpath, String(proc.pid))
     proc.stdin.write(
       JSON.stringify({
         action: "login_open",
@@ -477,6 +509,7 @@ export namespace Webchat {
     if (!Number.isFinite(pid) || pid <= 0) return existsSync(storageFile(input))
     const ok = kill(pid)
     await Bun.sleep(700)
+    await rm(file).catch(() => undefined)
     log.info("webchat.login.confirm.node_driver", { browser: input.browser, target: input.target, pid, ok })
     return existsSync(storageFile(input))
   }
