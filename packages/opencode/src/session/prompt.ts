@@ -210,6 +210,8 @@ export namespace SessionPrompt {
   })
 
   async function promptWebchat(input: { input: PromptInput; message: MessageV2.WithParts }) {
+    await SessionStatus.set(input.input.sessionID, { type: "busy" })
+    await using _ = defer(() => SessionStatus.set(input.input.sessionID, { type: "idle" }))
     const cfg = await Config.get()
     const txt = input.message.parts
       .filter((part) => part.type === "text")
