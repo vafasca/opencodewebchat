@@ -116,6 +116,28 @@ const send = async (page, input, txt, mode) => {
   const val = (txt || "").trim()
   if (!val) return
   const key = val.slice(0, Math.min(32, val.length))
+  if (mode === "chatgpt") {
+    await page
+      .evaluate((val) => {
+        const textarea = document.querySelector("#prompt-textarea")
+        if (!(textarea instanceof HTMLElement)) return false
+        textarea.focus()
+        const data = new DataTransfer()
+        data.setData("text/plain", val)
+        textarea.dispatchEvent(
+          new ClipboardEvent("paste", {
+            clipboardData: data,
+            bubbles: true,
+          }),
+        )
+        if (textarea instanceof HTMLTextAreaElement && !textarea.value.includes(val)) {
+          textarea.value = val
+          textarea.dispatchEvent(new Event("input", { bubbles: true }))
+        }
+        return true
+      }, val)
+      .catch(() => false)
+  }
   await page.locator(input).click().catch(() => undefined)
   await page
     .locator(input)

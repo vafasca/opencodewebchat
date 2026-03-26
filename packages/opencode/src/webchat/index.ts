@@ -176,21 +176,29 @@ export namespace Webchat {
       return ""
     }
 
+    const node = await nodeRun({
+      browser: input.browser,
+      target: mode,
+      prompt: input.prompt,
+      timeout,
+      settle,
+      url,
+      input: input.input,
+      response: input.response,
+      headless: input.headless ?? false,
+      storage: storageFile({ target: mode, browser: input.browser }),
+    })
+    if (node?.ok && "text" in node && node.text) {
+      log.info("webchat.run.node_driver_ok", { target: mode, browser: input.browser, size: node.text.length })
+      return node.text
+    }
+    if (node && !node.ok) {
+      log.warn("webchat.run.node_driver_fail", { error: node.error })
+    }
+
     if (process.platform === "win32") {
       log.warn("webchat.run.win32.node_driver", {
         note: "using node driver as primary path on windows",
-      })
-      const node = await nodeRun({
-        browser: input.browser,
-        target: mode,
-        prompt: input.prompt,
-        timeout,
-        settle,
-        url,
-        input: input.input,
-        response: input.response,
-        headless: input.headless ?? false,
-        storage: storageFile({ target: mode, browser: input.browser }),
       })
       if (node?.ok && "text" in node && node.text) return node.text
       return `No se pudo abrir navegador en Windows driver. Detalle: ${node?.error ?? "sin detalle"}`
@@ -365,6 +373,28 @@ export namespace Webchat {
     const val = txt.trim()
     if (!val) return
     const key = val.slice(0, Math.min(32, val.length))
+    if (mode === "chatgpt") {
+      await page
+        .evaluate((val) => {
+          const textarea = document.querySelector("#prompt-textarea")
+          if (!(textarea instanceof HTMLElement)) return false
+          textarea.focus()
+          const data = new DataTransfer()
+          data.setData("text/plain", val)
+          textarea.dispatchEvent(
+            new ClipboardEvent("paste", {
+              clipboardData: data,
+              bubbles: true,
+            }),
+          )
+          if (textarea instanceof HTMLTextAreaElement && !textarea.value.includes(val)) {
+            textarea.value = val
+            textarea.dispatchEvent(new Event("input", { bubbles: true }))
+          }
+          return true
+        }, val)
+        .catch(() => false)
+    }
     await page.locator(input).click().catch(() => undefined)
     await page
       .locator(input)
