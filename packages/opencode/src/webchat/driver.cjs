@@ -105,6 +105,8 @@ const waitText = async (page, list, old, settle, timeout) => {
 }
 
 const send = async (page, input, txt, mode) => {
+  const val = (txt || "").trim()
+  if (!val) return
   await page.locator(input).click().catch(() => undefined)
   await page
     .locator(input)
@@ -125,8 +127,23 @@ const send = async (page, input, txt, mode) => {
       return true
     }, txt)
     .catch(() => false)
-  await page.locator(input).fill(txt).catch(() => undefined)
+  const has = async () =>
+    page
+      .locator(input)
+      .first()
+      .evaluate((el, expected) => {
+        const txt = expected.trim()
+        if (!txt) return false
+        if (el instanceof HTMLTextAreaElement) return el.value.includes(txt)
+        const val = el.textContent || ""
+        return val.includes(txt)
+      }, val)
+      .catch(() => false)
+  if (!(await has())) {
+    await page.locator(input).fill(txt).catch(() => undefined)
+  }
   await page.waitForTimeout(600)
+  if (!(await has())) return
   const fast = await page
     .locator(input)
     .first()
@@ -146,34 +163,36 @@ const send = async (page, input, txt, mode) => {
     const sent = await page
       .locator(input)
       .evaluate((el, expected) => {
-        if (el instanceof HTMLTextAreaElement) return !el.value.includes(expected)
+        if (el instanceof HTMLTextAreaElement) return !el.value.includes(expected.trim())
         const val = el.textContent || ""
-        return !val.includes(expected)
-      }, txt)
+        return !val.includes(expected.trim())
+      }, val)
       .catch(() => false)
     if (sent) return
   }
+  if (!(await has())) return
   await page.locator(input).press("Enter").catch(() => page.keyboard.press("Enter"))
   await page.waitForTimeout(700)
   const stuck = await page
     .locator(input)
     .evaluate((el, expected) => {
-      if (el instanceof HTMLTextAreaElement) return el.value.includes(expected)
+      if (el instanceof HTMLTextAreaElement) return el.value.includes(expected.trim())
       const val = el.textContent || ""
-      return val.includes(expected)
-    }, txt)
+      return val.includes(expected.trim())
+    }, val)
     .catch(() => false)
   if (!stuck) return
+  if (!(await has())) return
   await page.keyboard.press("Control+Enter").catch(() => undefined)
   await page.keyboard.press("Meta+Enter").catch(() => undefined)
   await page.waitForTimeout(700)
   const sentByHotkey = await page
     .locator(input)
     .evaluate((el, expected) => {
-      if (el instanceof HTMLTextAreaElement) return !el.value.includes(expected)
+      if (el instanceof HTMLTextAreaElement) return !el.value.includes(expected.trim())
       const val = el.textContent || ""
-      return !val.includes(expected)
-    }, txt)
+      return !val.includes(expected.trim())
+    }, val)
     .catch(() => false)
   if (sentByHotkey) return
   const list =
