@@ -247,11 +247,13 @@ export namespace SessionPrompt {
         "Prueba: bunx playwright install",
       ].join("\n")
     })
+    const acts = await webchatExec(raw)
     const save = await webchatSave(raw)
     const norm = webchatNorm(raw)
-    const content = save.length
+    const content = save.length || acts.length
       ? [
           raw,
+          ...(acts.length ? ["", "Acciones ejecutadas automáticamente:", ...acts.map((item) => `- ${item}`)] : []),
           ...(norm ? ["", "Formato normalizado (compatible):", norm] : []),
           "",
           "Archivos creados automáticamente:",
@@ -332,6 +334,8 @@ export namespace SessionPrompt {
       "  ```<lenguaje>",
       "  ...contenido...",
       "  ```",
+      "- Opcional avanzado: también puedes devolver un bloque ```opencode-actions con JSON.",
+      '- Formato JSON: {"actions":[{"tool":"write","file":"src/a.txt","content":"hola"}]}',
     ]
       .filter((item) => item)
       .join("\n")
@@ -383,6 +387,55 @@ export namespace SessionPrompt {
         return [`Ruta: ${rel}`, `\`\`\`${lang}`, item.body, "```"].join("\n")
       })
       .join("\n\n")
+
+  const webchatExec = async (txt: string) => {
+    const out: string[] = []
+    const data = [...txt.matchAll(/```opencode-actions\s*\n([\s\S]*?)```/gi)]
+      .flatMap((item) => parseActions(item[1] ?? ""))
+      .flatMap((item) => item.actions)
+    for (const item of data) {
+      if (item.tool === "write") {
+        const file = path.resolve(Instance.directory, item.file)
+        if (!Filesystem.contains(Instance.directory, file)) continue
+        await Filesystem.write(file, item.content)
+        out.push(`write ${path.relative(Instance.directory, file) || path.basename(file)}`)
+        continue
+      }
+      if (item.tool === "read") {
+        const file = path.resolve(Instance.directory, item.file)
+        if (!Filesystem.contains(Instance.directory, file)) continue
+        const body = await Filesystem.readText(file).catch(() => "")
+        if (!body) continue
+        out.push(`read ${path.relative(Instance.directory, file) || path.basename(file)} (${body.length} chars)`)
+      }
+    }
+    return out
+  }
+
+  const parseActions = (txt: string) => {
+    const item = parseJson(txt)
+    if (!item) return []
+    const schema = z
+      .object({
+        actions: z.array(
+          z.discriminatedUnion("tool", [
+            z.object({ tool: z.literal("write"), file: z.string(), content: z.string() }),
+            z.object({ tool: z.literal("read"), file: z.string() }),
+          ]),
+        ),
+      })
+      .safeParse(item)
+    if (!schema.success) return []
+    return [schema.data]
+  }
+
+  const parseJson = (txt: string) => {
+    try {
+      return JSON.parse(txt)
+    } catch {
+      return undefined
+    }
+  }
 
   export async function resolvePromptParts(template: string): Promise<PromptInput["parts"]> {
     const parts: PromptInput["parts"] = [
