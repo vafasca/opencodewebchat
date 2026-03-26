@@ -417,11 +417,14 @@ export namespace Webchat {
       .locator(input)
       .first()
       .evaluate((el) => {
+        const voice = (txt: string) => txt.includes("voice") || txt.includes("voz") || txt.includes("audio")
+        const send = (txt: string) => txt.includes("send") || txt.includes("enviar") || txt.includes("submit")
         const root = el.closest("form") ?? document
         const btn = root.querySelector(".composer-submit-button-color")
         if (!(btn instanceof HTMLButtonElement)) return false
         const label = (btn.getAttribute("aria-label") ?? "").toLowerCase()
-        if (label.includes("start voice") || label.includes("iniciar voz")) return false
+        if (voice(label)) return false
+        if (!send(label)) return false
         if (btn.disabled) return false
         btn.click()
         return true
@@ -500,16 +503,21 @@ export namespace Webchat {
             "form button[type='submit']",
           ]
     for (const item of list) {
+      if (!(await has())) return
       const ok = await page
         .locator(input)
         .first()
         .evaluate((el, sel) => {
+          const voice = (txt: string) => txt.includes("voice") || txt.includes("voz") || txt.includes("audio")
           const root = el.closest("form") ?? document
           const pick = root.querySelector(sel)
           if (!(pick instanceof HTMLElement)) return false
           const style = window.getComputedStyle(pick)
           if (style.display === "none" || style.visibility === "hidden") return false
           if (pick instanceof HTMLButtonElement && pick.disabled) return false
+          const label = (pick.getAttribute("aria-label") ?? "").toLowerCase()
+          const key = [label, pick.getAttribute("data-testid") ?? "", pick.textContent ?? ""].join(" ").toLowerCase()
+          if (voice(key)) return false
           pick.click()
           return true
         }, item)
@@ -528,10 +536,10 @@ export namespace Webchat {
       const sent = await page
         .locator(input)
         .evaluate((el, expected) => {
-          if (el instanceof HTMLTextAreaElement) return !el.value.includes(expected)
+          if (el instanceof HTMLTextAreaElement) return !el.value.includes(expected.trim())
           const val = el.textContent ?? ""
-          return !val.includes(expected)
-        }, txt)
+          return !val.includes(expected.trim())
+        }, val)
         .catch(() => false)
       if (sent) return
     }
