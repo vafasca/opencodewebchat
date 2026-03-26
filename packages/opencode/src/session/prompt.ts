@@ -220,17 +220,21 @@ export namespace SessionPrompt {
       browser: input.input.webchat?.browser,
       hasText: txt.length > 0,
     })
-    let raw = await Webchat.run({
-      prompt: txt,
-      browser: input.input.webchat?.browser ?? cfg.webchat?.browser ?? "chrome",
-      target: input.input.webchat?.target ?? cfg.webchat?.target ?? "chatgpt",
-      url: cfg.webchat?.url,
-      timeout: cfg.webchat?.timeout,
-      input: cfg.webchat?.input_selector,
-      response: cfg.webchat?.response_selector,
-      settle: cfg.webchat?.settle,
-      headless: cfg.webchat?.headless,
-    }).catch((err) => {
+    const max = 6
+    const acts: string[] = []
+    const run = async (prompt: string) =>
+      Webchat.run({
+        prompt,
+        browser: input.input.webchat?.browser ?? cfg.webchat?.browser ?? "chrome",
+        target: input.input.webchat?.target ?? cfg.webchat?.target ?? "chatgpt",
+        url: cfg.webchat?.url,
+        timeout: cfg.webchat?.timeout,
+        input: cfg.webchat?.input_selector,
+        response: cfg.webchat?.response_selector,
+        settle: cfg.webchat?.settle,
+        headless: cfg.webchat?.headless,
+      })
+    let raw = await run(txt).catch((err) => {
       const txt = err instanceof Error ? err.message : String(err)
       log.error("prompt.webchat.failed", {
         sessionID: input.input.sessionID,
@@ -248,11 +252,22 @@ export namespace SessionPrompt {
         "Prueba: bunx playwright install",
       ].join("\n")
     })
+    for (let i = 0; i < max; i++) {
+      const item = await webchatExec(raw)
+      if (!item.actions.length) break
+      acts.push(...item.actions)
+      const next = await run(webchatFollowup(item.results, i + 1, max)).catch(() => "")
+      if (!next.trim()) break
+      raw = [raw, "", next].join("\n")
+    }
+    raw = [raw, "", webchatStop()].join("\n")
+    const end = await run(webchatStop()).catch(() => "")
+    if (end.trim()) raw = [raw, "", end].join("\n")
     const ask = webchatAsk(input.message)
     const miss = webchatMissing(ask, raw)
     if (miss.length) {
-      const retry = await Webchat.run({
-        prompt: [
+      const retry = await run(
+        [
           "Te faltaron archivos obligatorios en tu respuesta anterior.",
           `Archivos faltantes: ${miss.join(", ")}`,
           "Devuelve SOLO esos archivos faltantes en este formato exacto:",
@@ -262,20 +277,11 @@ export namespace SessionPrompt {
           "```",
           "No repitas archivos ya entregados.",
         ].join("\n"),
-        browser: input.input.webchat?.browser ?? cfg.webchat?.browser ?? "chrome",
-        target: input.input.webchat?.target ?? cfg.webchat?.target ?? "chatgpt",
-        url: cfg.webchat?.url,
-        timeout: cfg.webchat?.timeout,
-        input: cfg.webchat?.input_selector,
-        response: cfg.webchat?.response_selector,
-        settle: cfg.webchat?.settle,
-        headless: cfg.webchat?.headless,
-      }).catch(() => "")
+      ).catch(() => "")
       if (retry.trim()) {
         raw = [raw, "", retry].join("\n")
       }
     }
-    const acts = await webchatExec(raw)
     const save = await webchatSave(raw)
     const norm = webchatNorm(raw)
     const content = save.length || acts.length
@@ -373,8 +379,10 @@ export namespace SessionPrompt {
       "  ```<lenguaje>",
       "  ...contenido...",
       "  ```",
-      "- Opcional avanzado: también puedes devolver un bloque ```opencode-actions con JSON.",
-      '- Formato JSON: {"actions":[{"tool":"write","file":"src/a.txt","content":"hola"}]}',
+      "- Si necesitas herramientas, devuelve SOLO un bloque ```opencode-actions con JSON válido.",
+      "- Herramientas soportadas: write, read, bash.",
+      '- Formato JSON: {"actions":[{"tool":"bash","cmd":"ls -la"}]}',
+      "- Espera el resultado de herramientas antes de dar la respuesta final.",
     ]
       .filter((item) => item)
       .join("\n")
@@ -382,8 +390,7 @@ export namespace SessionPrompt {
   }
 
   const webchatFiles = (txt: string) => {
-    const out: { file: string; body: string }[] = []
-    const set = new Set<string>()
+    const out = new Map<string, { file: string; body: string }>()
     const list = [
       ...txt.matchAll(/(?:ruta|path|archivo|file)\s*:\s*([^\n`]+?)\s*\n```[\w-]*\n([\s\S]*?)```/gi),
       ...txt.matchAll(
@@ -400,11 +407,10 @@ export namespace SessionPrompt {
       if (!rel || rel === "." || rel === "..") continue
       const file = path.resolve(Instance.directory, rel)
       if (!Filesystem.contains(Instance.directory, file)) continue
-      if (set.has(file)) continue
-      set.add(file)
-      out.push({ file, body })
+      if (out.has(file)) out.delete(file)
+      out.set(file, { file, body })
     }
-    return out
+    return [...out.values()]
   }
 
   const webchatSave = async (txt: string) => {
@@ -449,7 +455,8 @@ export namespace SessionPrompt {
   }
 
   const webchatExec = async (txt: string) => {
-    const out: string[] = []
+    const actions: string[] = []
+    const results: string[] = []
     const data = [...txt.matchAll(/```opencode-actions\s*\n([\s\S]*?)```/gi)]
       .flatMap((item) => parseActions(item[1] ?? ""))
       .flatMap((item) => item.actions)
@@ -458,7 +465,9 @@ export namespace SessionPrompt {
         const file = path.resolve(Instance.directory, item.file)
         if (!Filesystem.contains(Instance.directory, file)) continue
         await Filesystem.write(file, item.content)
-        out.push(`write ${path.relative(Instance.directory, file) || path.basename(file)}`)
+        const rel = path.relative(Instance.directory, file) || path.basename(file)
+        actions.push(`write ${rel}`)
+        results.push(`tool: write\nfile: ${rel}\nstatus: ok`)
         continue
       }
       if (item.tool === "read") {
@@ -466,11 +475,46 @@ export namespace SessionPrompt {
         if (!Filesystem.contains(Instance.directory, file)) continue
         const body = await Filesystem.readText(file).catch(() => "")
         if (!body) continue
-        out.push(`read ${path.relative(Instance.directory, file) || path.basename(file)} (${body.length} chars)`)
+        const rel = path.relative(Instance.directory, file) || path.basename(file)
+        actions.push(`read ${rel} (${body.length} chars)`)
+        results.push(`tool: read\nfile: ${rel}\nstatus: ok\noutput:\n${body}`)
+        continue
+      }
+      if (item.tool === "bash") {
+        const out = await Process.run([item.cmd], {
+          cwd: Instance.directory,
+          shell: true,
+          timeout: 30_000,
+          nothrow: true,
+        })
+        const body = [out.stdout.toString(), out.stderr.toString()].filter((item) => item.trim()).join("\n")
+        actions.push(`bash ${item.cmd} (exit ${out.code})`)
+        results.push(
+          ["tool: bash", `cmd: ${item.cmd}`, `exit: ${out.code}`, "status: ok", `output:\n${body || "(empty)"}`].join(
+            "\n",
+          ),
+        )
       }
     }
-    return out
+    return { actions, results }
   }
+
+  const webchatFollowup = (list: string[], step: number, max: number) =>
+    [
+      `Resultado de herramientas (paso ${step}/${max}):`,
+      ...list,
+      "",
+      "Continúa el flujo agéntico.",
+      "Si necesitas más herramientas, devuelve SOLO ```opencode-actions.",
+      "Si ya terminaste, devuelve respuesta final + archivos en formato Ruta/código.",
+    ].join("\n")
+
+  const webchatStop = () =>
+    [
+      "Cierre de ciclo:",
+      "Si ya no necesitas herramientas, entrega ahora la respuesta final y los archivos.",
+      "No incluyas texto meta; solo resultado final.",
+    ].join("\n")
 
   const parseActions = (txt: string) => {
     const item = parseJson(txt)
@@ -481,6 +525,7 @@ export namespace SessionPrompt {
           z.discriminatedUnion("tool", [
             z.object({ tool: z.literal("write"), file: z.string(), content: z.string() }),
             z.object({ tool: z.literal("read"), file: z.string() }),
+            z.object({ tool: z.literal("bash"), cmd: z.string() }),
           ]),
         ),
       })
