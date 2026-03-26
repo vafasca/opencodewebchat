@@ -219,7 +219,7 @@ export namespace SessionPrompt {
       browser: input.input.webchat?.browser,
       hasText: txt.length > 0,
     })
-    const raw = await Webchat.run({
+    let raw = await Webchat.run({
       prompt: txt,
       browser: input.input.webchat?.browser ?? cfg.webchat?.browser ?? "chrome",
       target: input.input.webchat?.target ?? cfg.webchat?.target ?? "chatgpt",
@@ -247,6 +247,33 @@ export namespace SessionPrompt {
         "Prueba: bunx playwright install",
       ].join("\n")
     })
+    const ask = webchatAsk(input.message)
+    const miss = webchatMissing(ask, raw)
+    if (miss.length) {
+      const retry = await Webchat.run({
+        prompt: [
+          "Te faltaron archivos obligatorios en tu respuesta anterior.",
+          `Archivos faltantes: ${miss.join(", ")}`,
+          "Devuelve SOLO esos archivos faltantes en este formato exacto:",
+          "Ruta: <archivo>",
+          "```<lenguaje>",
+          "...contenido completo...",
+          "```",
+          "No repitas archivos ya entregados.",
+        ].join("\n"),
+        browser: input.input.webchat?.browser ?? cfg.webchat?.browser ?? "chrome",
+        target: input.input.webchat?.target ?? cfg.webchat?.target ?? "chatgpt",
+        url: cfg.webchat?.url,
+        timeout: cfg.webchat?.timeout,
+        input: cfg.webchat?.input_selector,
+        response: cfg.webchat?.response_selector,
+        settle: cfg.webchat?.settle,
+        headless: cfg.webchat?.headless,
+      }).catch(() => "")
+      if (retry.trim()) {
+        raw = [raw, "", retry].join("\n")
+      }
+    }
     const acts = await webchatExec(raw)
     const save = await webchatSave(raw)
     const norm = webchatNorm(raw)
@@ -387,6 +414,27 @@ export namespace SessionPrompt {
         return [`Ruta: ${rel}`, `\`\`\`${lang}`, item.body, "```"].join("\n")
       })
       .join("\n\n")
+
+  const webchatAsk = (msg: MessageV2.WithParts) =>
+    msg.parts
+      .flatMap((item) => (item.type === "text" ? [item.text] : []))
+      .join("\n")
+      .trim()
+
+  const webchatMissing = (ask: string, txt: string) => {
+    const want = (() => {
+      const val = ask.toLowerCase()
+      if (val.includes("html") && val.includes("css") && (val.includes("javascript") || val.includes("js"))) {
+        return ["index.html", "style.css", "script.js"]
+      }
+      return []
+    })()
+    if (!want.length) return []
+    const got = new Set(
+      webchatFiles(txt).map((item) => (path.relative(Instance.directory, item.file) || path.basename(item.file)).toLowerCase()),
+    )
+    return want.filter((item) => !got.has(item))
+  }
 
   const webchatExec = async (txt: string) => {
     const out: string[] = []
