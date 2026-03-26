@@ -67,6 +67,43 @@ const find = async (page, list, timeout) => {
   }
 }
 
+const lastText = async (page, list) => {
+  for (const item of list) {
+    const text = await page
+      .locator(item)
+      .last()
+      .innerText({ timeout: 1200 })
+      .catch(() => "")
+    if (text.trim()) return text
+  }
+  return ""
+}
+
+const waitText = async (page, list, old, settle, timeout) => {
+  let text = ""
+  let same = 0
+  const loops = Math.max(30, Math.floor(timeout / 500))
+  for (let i = 0; i < loops; i++) {
+    const val = await lastText(page, list)
+    if (!val.trim()) {
+      await page.waitForTimeout(500)
+      continue
+    }
+    if (old && val.trim() === old.trim()) {
+      await page.waitForTimeout(500)
+      continue
+    }
+    if (val === text) same += 1
+    if (val !== text) {
+      text = val
+      same = 0
+    }
+    if (same >= Math.max(1, Math.floor(settle / 500))) break
+    await page.waitForTimeout(500)
+  }
+  return text
+}
+
 const send = async (page, input, txt, mode) => {
   await page.locator(input).click().catch(() => undefined)
   await page
@@ -399,32 +436,15 @@ const run = async () => {
     await browser.close().catch(() => undefined)
     return { ok: false, error: "node-driver input selector missing." }
   }
+  const old = await lastText(page, outputsFromMode(mode))
   await send(page, input, data.prompt || "", mode)
   const output = await find(page, outputs, timeout)
-  if (!output) {
+  const list = output ? [output, ...outputsFromMode(mode)] : outputsFromMode(mode)
+  const text = await waitText(page, list, old, settle, timeout)
+  if (!text.trim()) {
     await ctx.close().catch(() => undefined)
     await browser.close().catch(() => undefined)
     return { ok: false, error: "node-driver output selector missing." }
-  }
-  let text = ""
-  let same = 0
-  for (let i = 0; i < 120; i++) {
-    const val = await page
-      .locator(output)
-      .last()
-      .innerText({ timeout: 5000 })
-      .catch(() => "")
-    if (!val.trim()) {
-      await page.waitForTimeout(500)
-      continue
-    }
-    if (val === text) same += 1
-    if (val !== text) {
-      text = val
-      same = 0
-    }
-    if (same >= Math.max(1, Math.floor(settle / 500))) break
-    await page.waitForTimeout(500)
   }
   if (data.storage) {
     await mkdir(pathUtil.dirname(data.storage), { recursive: true }).catch(() => undefined)

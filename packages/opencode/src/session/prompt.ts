@@ -334,10 +334,15 @@ export namespace SessionPrompt {
   const webchatSave = async (txt: string) => {
     const out: string[] = []
     const set = new Set<string>()
-    const list = [...txt.matchAll(/(?:ruta|path|archivo|file)\s*:\s*([^\n`]+?)\s*\n```[\w-]*\n([\s\S]*?)```/gi)]
+    const list = [
+      ...txt.matchAll(/(?:ruta|path|archivo|file)\s*:\s*([^\n`]+?)\s*\n```[\w-]*\n([\s\S]*?)```/gi),
+      ...txt.matchAll(
+        /(?:^|\n)(?:archivo\s*\d+\s*\n)?\s*(?:ruta|path|archivo|file)\s*:\s*([^\n]+)\n+([\s\S]*?)(?=\n(?:archivo\s*\d+\s*\n)?\s*(?:ruta|path|archivo|file)\s*:|\n(?:✔|si quieres|si deseas|si prefieres)|$)/gi,
+      ),
+    ]
     for (const item of list) {
       const raw = item[1]?.trim()
-      const body = item[2] ?? ""
+      const body = (item[2] ?? "").replace(/^\s*(html|css|javascript|js|ts)\s*\n+/i, "")
       if (!raw || !body.trim()) continue
       const clean = raw.replace(/^["'`]|["'`]$/g, "")
       const norm = clean.replace(/\\/g, "/")
