@@ -248,9 +248,11 @@ export namespace SessionPrompt {
       ].join("\n")
     })
     const save = await webchatSave(raw)
+    const norm = webchatNorm(raw)
     const content = save.length
       ? [
           raw,
+          ...(norm ? ["", "Formato normalizado (compatible):", norm] : []),
           "",
           "Archivos creados automáticamente:",
           ...save.map((item) => `- ${item}`),
@@ -325,14 +327,19 @@ export namespace SessionPrompt {
       "- Evita saludos largos o plantillas; entrega directamente el resultado.",
       "- Si falta un dato crítico, haz una sola pregunta breve. Si no falta, procede.",
       "- Si creas o editas archivos, indica rutas exactas y qué hiciste.",
+      "- Si devuelves archivos, usa SIEMPRE este formato por archivo:",
+      "  Ruta: <archivo>",
+      "  ```<lenguaje>",
+      "  ...contenido...",
+      "  ```",
     ]
       .filter((item) => item)
       .join("\n")
       .trim()
   }
 
-  const webchatSave = async (txt: string) => {
-    const out: string[] = []
+  const webchatFiles = (txt: string) => {
+    const out: { file: string; body: string }[] = []
     const set = new Set<string>()
     const list = [
       ...txt.matchAll(/(?:ruta|path|archivo|file)\s*:\s*([^\n`]+?)\s*\n```[\w-]*\n([\s\S]*?)```/gi),
@@ -342,7 +349,7 @@ export namespace SessionPrompt {
     ]
     for (const item of list) {
       const raw = item[1]?.trim()
-      const body = (item[2] ?? "").replace(/^\s*(html|css|javascript|js|ts)\s*\n+/i, "")
+      const body = (item[2] ?? "").replace(/^\s*(html|css|javascript|js|ts)\s*\n+/i, "").trimEnd()
       if (!raw || !body.trim()) continue
       const clean = raw.replace(/^["'`]|["'`]$/g, "")
       const norm = clean.replace(/\\/g, "/")
@@ -352,11 +359,30 @@ export namespace SessionPrompt {
       if (!Filesystem.contains(Instance.directory, file)) continue
       if (set.has(file)) continue
       set.add(file)
-      await Filesystem.write(file, body)
+      out.push({ file, body })
+    }
+    return out
+  }
+
+  const webchatSave = async (txt: string) => {
+    const out: string[] = []
+    for (const item of webchatFiles(txt)) {
+      await Filesystem.write(item.file, item.body)
+      const file = item.file
       out.push(path.relative(Instance.directory, file) || path.basename(file))
     }
     return out
   }
+
+  const webchatNorm = (txt: string) =>
+    webchatFiles(txt)
+      .map((item) => {
+        const rel = path.relative(Instance.directory, item.file) || path.basename(item.file)
+        const ext = path.extname(rel).replace(".", "").toLowerCase()
+        const lang = ext === "js" ? "javascript" : ext || "text"
+        return [`Ruta: ${rel}`, `\`\`\`${lang}`, item.body, "```"].join("\n")
+      })
+      .join("\n\n")
 
   export async function resolvePromptParts(template: string): Promise<PromptInput["parts"]> {
     const parts: PromptInput["parts"] = [
