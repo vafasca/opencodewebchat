@@ -8,7 +8,15 @@ const pathUtil = require("path")
 const target = {
   chatgpt: {
     url: "https://chatgpt.com/",
-    input: ["textarea", "#prompt-textarea", "div#prompt-textarea", "div#prompt-textarea[contenteditable='true']"],
+    input: [
+      "textarea",
+      "#prompt-textarea",
+      "div#prompt-textarea",
+      "div#prompt-textarea[contenteditable='true']",
+      "div[contenteditable='true'][data-testid='composer-input']",
+      "div[contenteditable='true'][aria-label*='Message']",
+      "div[contenteditable='true'][aria-label*='mensaje']",
+    ],
     output: [
       "[data-message-author-role='assistant']",
       "div[data-message-author-role='assistant']",
@@ -107,6 +115,7 @@ const waitText = async (page, list, old, settle, timeout) => {
 const send = async (page, input, txt, mode) => {
   const val = (txt || "").trim()
   if (!val) return
+  const key = val.slice(0, Math.min(32, val.length))
   await page.locator(input).click().catch(() => undefined)
   await page
     .locator(input)
@@ -124,6 +133,10 @@ const send = async (page, input, txt, mode) => {
         el.value = val
         el.dispatchEvent(new Event("input", { bubbles: true }))
       }
+      if (!(el instanceof HTMLTextAreaElement) && el.isContentEditable) {
+        el.textContent = val
+        el.dispatchEvent(new InputEvent("input", { bubbles: true, data: val, inputType: "insertText" }))
+      }
       return true
     }, txt)
     .catch(() => false)
@@ -132,15 +145,20 @@ const send = async (page, input, txt, mode) => {
       .locator(input)
       .first()
       .evaluate((el, expected) => {
-        const txt = expected.trim()
+        const norm = (txt) => txt.replace(/\s+/g, " ").trim()
+        const txt = norm(expected)
         if (!txt) return false
-        if (el instanceof HTMLTextAreaElement) return el.value.includes(txt)
+        if (el instanceof HTMLTextAreaElement) return norm(el.value).includes(txt)
         const val = el.textContent || ""
-        return val.includes(txt)
-      }, val)
+        return norm(val).includes(txt)
+      }, key)
       .catch(() => false)
   if (!(await has())) {
     await page.locator(input).fill(txt).catch(() => undefined)
+    await page
+      .locator(input)
+      .pressSequentially(txt, { delay: 4 })
+      .catch(() => undefined)
   }
   await page.waitForTimeout(600)
   if (!(await has())) return

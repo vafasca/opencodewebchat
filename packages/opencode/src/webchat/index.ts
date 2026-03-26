@@ -16,7 +16,14 @@ export namespace Webchat {
   const target = {
     chatgpt: {
       url: "https://chatgpt.com/",
-      input: ["textarea", "#prompt-textarea"],
+      input: [
+        "textarea",
+        "#prompt-textarea",
+        "div#prompt-textarea[contenteditable='true']",
+        "div[contenteditable='true'][data-testid='composer-input']",
+        "div[contenteditable='true'][aria-label*='Message']",
+        "div[contenteditable='true'][aria-label*='mensaje']",
+      ],
       response: [
         "[data-message-author-role='assistant']",
         "article[data-testid='conversation-turn']",
@@ -357,6 +364,7 @@ export namespace Webchat {
   const send = async (page: Page, input: string, txt: string, mode: "chatgpt" | "claude") => {
     const val = txt.trim()
     if (!val) return
+    const key = val.slice(0, Math.min(32, val.length))
     await page.locator(input).click().catch(() => undefined)
     await page
       .locator(input)
@@ -374,6 +382,10 @@ export namespace Webchat {
           el.value = val
           el.dispatchEvent(new Event("input", { bubbles: true }))
         }
+        if (!(el instanceof HTMLTextAreaElement) && el.isContentEditable) {
+          el.textContent = val
+          el.dispatchEvent(new InputEvent("input", { bubbles: true, data: val, inputType: "insertText" }))
+        }
         return true
       }, txt)
       .catch(() => false)
@@ -382,14 +394,19 @@ export namespace Webchat {
         .locator(input)
         .first()
         .evaluate((el, expected) => {
-          const txt = expected.trim()
+          const norm = (txt: string) => txt.replace(/\s+/g, " ").trim()
+          const txt = norm(expected)
           if (!txt) return false
-          if (el instanceof HTMLTextAreaElement) return el.value.includes(txt)
-          return (el.textContent ?? "").includes(txt)
-        }, val)
+          if (el instanceof HTMLTextAreaElement) return norm(el.value).includes(txt)
+          return norm(el.textContent ?? "").includes(txt)
+        }, key)
         .catch(() => false)
     if (!(await has())) {
       await page.locator(input).fill(txt).catch(() => undefined)
+      await page
+        .locator(input)
+        .pressSequentially(txt, { delay: 4 })
+        .catch(() => undefined)
     }
     await page.waitForTimeout(600)
     if (!(await has())) {
