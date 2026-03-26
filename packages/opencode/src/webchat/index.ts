@@ -9,13 +9,21 @@ import os from "os"
 export namespace Webchat {
   const log = Log.create({ service: "webchat" })
   const login = new Map<string, { browser: Browser; context: BrowserContext }>()
+  const live = new Map<string, { browser: Browser; context: BrowserContext; page: Page; mode: "chatgpt" | "claude" }>()
 
   export const DEFAULT_URL = "https://chatgpt.com/"
 
   const target = {
     chatgpt: {
       url: "https://chatgpt.com/",
-      input: ["textarea", "#prompt-textarea"],
+      input: [
+        "textarea",
+        "#prompt-textarea",
+        "div#prompt-textarea[contenteditable='true']",
+        "div[contenteditable='true'][data-testid='composer-input']",
+        "div[contenteditable='true'][aria-label*='Message']",
+        "div[contenteditable='true'][aria-label*='mensaje']",
+      ],
       response: [
         "[data-message-author-role='assistant']",
         "article[data-testid='conversation-turn']",
@@ -168,21 +176,29 @@ export namespace Webchat {
       return ""
     }
 
+    const node = await nodeRun({
+      browser: input.browser,
+      target: mode,
+      prompt: input.prompt,
+      timeout,
+      settle,
+      url,
+      input: input.input,
+      response: input.response,
+      headless: input.headless ?? false,
+      storage: storageFile({ target: mode, browser: input.browser }),
+    })
+    if (node?.ok && "text" in node && node.text) {
+      log.info("webchat.run.node_driver_ok", { target: mode, browser: input.browser, size: node.text.length })
+      return node.text
+    }
+    if (node && !node.ok) {
+      log.warn("webchat.run.node_driver_fail", { error: node.error })
+    }
+
     if (process.platform === "win32") {
       log.warn("webchat.run.win32.node_driver", {
         note: "using node driver as primary path on windows",
-      })
-      const node = await nodeRun({
-        browser: input.browser,
-        target: mode,
-        prompt: input.prompt,
-        timeout,
-        settle,
-        url,
-        input: input.input,
-        response: input.response,
-        headless: input.headless ?? false,
-        storage: storageFile({ target: mode, browser: input.browser }),
       })
       if (node?.ok && "text" in node && node.text) return node.text
       return `No se pudo abrir navegador en Windows driver. Detalle: ${node?.error ?? "sin detalle"}`
@@ -196,43 +212,66 @@ export namespace Webchat {
     if (!playwright) {
       return "No se pudo cargar Playwright. Instala dependencias y ejecuta: bunx playwright install"
     }
-    const browser = await playwright.chromium
-      .launch({
-        channel,
-        headless: input.headless ?? false,
-      })
-      .catch(async (err) => {
-        const txt = err instanceof Error ? err.message : String(err)
-        log.error("webchat.run.launch_failed", { error: txt, channel })
-        log.warn("webchat.run.launch_fallback", {
-          note: "retrying with bundled chromium executable and no channel",
+    const key = `${mode}:${input.browser}:${input.headless ? "headless" : "headed"}`
+    const old = live.get(key)
+    const pick =
+      old &&
+      !old.page.isClosed() &&
+      old.mode === mode &&
+      old.browser.isConnected() &&
+      (await old.context.pages().then((item) => item.length > 0).catch(() => false))
+        ? old
+        : undefined
+    const item =
+      pick ??
+      (await (async () => {
+        const browser = await playwright.chromium
+          .launch({
+            channel,
+            headless: input.headless ?? false,
+          })
+          .catch(async (err) => {
+            const txt = err instanceof Error ? err.message : String(err)
+            log.error("webchat.run.launch_failed", { error: txt, channel })
+            log.warn("webchat.run.launch_fallback", {
+              note: "retrying with bundled chromium executable and no channel",
+            })
+            const retry = await playwright.chromium
+              .launch({
+                headless: input.headless ?? false,
+              })
+              .catch((retryErr) => {
+                const retryTxt = retryErr instanceof Error ? retryErr.message : String(retryErr)
+                log.error("webchat.run.launch_fallback_failed", { error: retryTxt })
+                return undefined
+              })
+            if (retry) return retry
+            const bin = pickPath(input.browser)
+            if (!bin) return undefined
+            log.warn("webchat.run.launch_executable_path", { bin })
+            const last = await playwright.chromium
+              .launch({
+                executablePath: bin,
+                headless: input.headless ?? false,
+              })
+              .catch((lastErr) => {
+                const lastTxt = lastErr instanceof Error ? lastErr.message : String(lastErr)
+                log.error("webchat.run.launch_executable_failed", { error: lastTxt, bin })
+                return undefined
+              })
+            return last
+          })
+        if (!browser) return
+        const file = storageFile({ target: mode, browser: input.browser })
+        const context = await browser.newContext({
+          ...(existsSync(file) ? { storageState: file } : {}),
         })
-        const retry = await playwright.chromium
-          .launch({
-            headless: input.headless ?? false,
-          })
-          .catch((retryErr) => {
-            const retryTxt = retryErr instanceof Error ? retryErr.message : String(retryErr)
-            log.error("webchat.run.launch_fallback_failed", { error: retryTxt })
-            return undefined
-          })
-        if (retry) return retry
-        const bin = pickPath(input.browser)
-        if (!bin) return undefined
-        log.warn("webchat.run.launch_executable_path", { bin })
-        const last = await playwright.chromium
-          .launch({
-            executablePath: bin,
-            headless: input.headless ?? false,
-          })
-          .catch((lastErr) => {
-            const lastTxt = lastErr instanceof Error ? lastErr.message : String(lastErr)
-            log.error("webchat.run.launch_executable_failed", { error: lastTxt, bin })
-            return undefined
-          })
-        return last
-      })
-    if (!browser) {
+        const page = await context.newPage()
+        const item = { browser, context, page, mode }
+        live.set(key, item)
+        return item
+      })())
+    if (!item) {
       const node = await nodeRun({
         browser: input.browser,
         target: mode,
@@ -252,19 +291,15 @@ export namespace Webchat {
         `Detalle: ${node?.error ?? "sin detalle"}`,
       ].join(" ")
     }
-    const file = storageFile({ target: mode, browser: input.browser })
-    const ctx = await browser.newContext({
-      ...(existsSync(file) ? { storageState: file } : {}),
-    })
-    const page = await ctx.newPage()
-    await page.goto(url, {
-      waitUntil: "domcontentloaded",
-      timeout,
-    })
+    const page = item.page
+    if (page.url() === "about:blank" || !page.url().startsWith("http")) {
+      await page.goto(url, {
+        waitUntil: "domcontentloaded",
+        timeout,
+      })
+    }
     const gate = await loginRequired(page, mode)
     if (gate) {
-      await ctx.close().catch(() => undefined)
-      await browser.close().catch(() => undefined)
       return gate
     }
     log.info("webchat.run.ready")
@@ -272,8 +307,6 @@ export namespace Webchat {
     if (!inputSel) {
       const msg = "No se encontró el input del chat. Verifica login, target y selector."
       log.error("webchat.run.input_missing", { target: mode, inputs })
-      await ctx.close().catch(() => undefined)
-      await browser.close().catch(() => undefined)
       return msg
     }
     log.info("webchat.run.input_found", { input: inputSel })
@@ -283,8 +316,6 @@ export namespace Webchat {
     if (!responseSel) {
       const msg = "No se detectó respuesta del chat. Revisa autenticación y selectores."
       log.error("webchat.run.output_missing", { target: mode, outputs })
-      await ctx.close().catch(() => undefined)
-      await browser.close().catch(() => undefined)
       return msg
     }
     log.info("webchat.run.output_found", { output: responseSel })
@@ -312,8 +343,6 @@ export namespace Webchat {
       await page.waitForTimeout(500)
     }
 
-    await ctx.close().catch(() => undefined)
-    await browser.close().catch(() => undefined)
     log.info("webchat.run.done", {
       size: text.length,
     })
@@ -341,25 +370,149 @@ export namespace Webchat {
   }
 
   const send = async (page: Page, input: string, txt: string, mode: "chatgpt" | "claude") => {
-    await page.locator(input).fill(txt)
+    const val = txt.trim()
+    if (!val) return
+    const key = val.slice(0, Math.min(32, val.length))
+    if (mode === "chatgpt") {
+      await page
+        .evaluate((val) => {
+          const textarea = document.querySelector("#prompt-textarea")
+          if (!(textarea instanceof HTMLElement)) return false
+          textarea.focus()
+          const data = new DataTransfer()
+          data.setData("text/plain", val)
+          textarea.dispatchEvent(
+            new ClipboardEvent("paste", {
+              clipboardData: data,
+              bubbles: true,
+            }),
+          )
+          if (textarea instanceof HTMLTextAreaElement && !textarea.value.includes(val)) {
+            textarea.value = val
+            textarea.dispatchEvent(new Event("input", { bubbles: true }))
+          }
+          return true
+        }, val)
+        .catch(() => false)
+    }
     await page.locator(input).click().catch(() => undefined)
+    await page
+      .locator(input)
+      .evaluate((el, val) => {
+        if (!(el instanceof HTMLElement)) return false
+        el.focus()
+        const dt = new DataTransfer()
+        dt.setData("text/plain", val)
+        const ev = new ClipboardEvent("paste", {
+          clipboardData: dt,
+          bubbles: true,
+        })
+        el.dispatchEvent(ev)
+        if (el instanceof HTMLTextAreaElement && !el.value.includes(val)) {
+          el.value = val
+          el.dispatchEvent(new Event("input", { bubbles: true }))
+        }
+        if (!(el instanceof HTMLTextAreaElement) && el.isContentEditable) {
+          el.textContent = val
+          el.dispatchEvent(new InputEvent("input", { bubbles: true, data: val, inputType: "insertText" }))
+        }
+        return true
+      }, txt)
+      .catch(() => false)
+    const has = async () =>
+      page
+        .locator(input)
+        .first()
+        .evaluate((el, expected) => {
+          const norm = (txt: string) => txt.replace(/\s+/g, " ").trim()
+          const txt = norm(expected)
+          if (!txt) return false
+          if (el instanceof HTMLTextAreaElement) return norm(el.value).includes(txt)
+          return norm(el.textContent ?? "").includes(txt)
+        }, key)
+        .catch(() => false)
+    if (!(await has())) {
+      await page.locator(input).fill(txt).catch(() => undefined)
+      await page
+        .locator(input)
+        .pressSequentially(txt, { delay: 4 })
+        .catch(() => undefined)
+    }
+    await page.waitForTimeout(600)
+    if (!(await has())) {
+      log.warn("webchat.run.send_no_text_after_paste")
+      return
+    }
+    const fast = await page
+      .locator(input)
+      .first()
+      .evaluate((el) => {
+        const voice = (txt: string) => txt.includes("voice") || txt.includes("voz") || txt.includes("audio")
+        const send = (txt: string) => txt.includes("send") || txt.includes("enviar") || txt.includes("submit")
+        const root = el.closest("form") ?? document
+        const btn = root.querySelector(".composer-submit-button-color")
+        if (!(btn instanceof HTMLButtonElement)) return false
+        const label = (btn.getAttribute("aria-label") ?? "").toLowerCase()
+        if (voice(label)) return false
+        if (!send(label)) return false
+        if (btn.disabled) return false
+        btn.click()
+        return true
+      })
+      .catch(() => false)
+    if (fast) {
+      await page.waitForTimeout(700)
+      const sent = await page
+        .locator(input)
+        .evaluate((el, expected) => {
+          if (el instanceof HTMLTextAreaElement) return !el.value.includes(expected.trim())
+          const val = el.textContent ?? ""
+          return !val.includes(expected.trim())
+        }, val)
+        .catch(() => false)
+      if (sent) return
+    }
+    if (!(await has())) return
     await page.locator(input).press("Enter").catch(() => page.keyboard.press("Enter"))
     await page.waitForTimeout(700)
     const stuck = await page
       .locator(input)
       .evaluate((el, expected) => {
-        if (el instanceof HTMLTextAreaElement) return el.value.includes(expected)
+        if (el instanceof HTMLTextAreaElement) return el.value.includes(expected.trim())
         const val = el.textContent ?? ""
-        return val.includes(expected)
-      }, txt)
+        return val.includes(expected.trim())
+      }, val)
       .catch(() => false)
     if (!stuck) return
+    if (!(await has())) return
+    await page.keyboard.press("Control+Enter").catch(() => undefined)
+    await page.keyboard.press("Meta+Enter").catch(() => undefined)
+    await page.waitForTimeout(700)
+    const sendByHotkey = await page
+      .locator(input)
+      .evaluate((el, expected) => {
+        if (el instanceof HTMLTextAreaElement) return !el.value.includes(expected.trim())
+        const val = el.textContent ?? ""
+        return !val.includes(expected.trim())
+      }, val)
+      .catch(() => false)
+    if (sendByHotkey) {
+      log.warn("webchat.run.send_hotkey_fallback")
+      return
+    }
     const list =
       mode === "chatgpt"
         ? [
+            "#composer-submit-button",
+            ".composer-submit-button-color",
+            "button.composer-submit-button-color",
+            "button[data-testid='composer-send-button']",
+            "button[data-testid='composer-submit-button']",
             "button[data-testid='fruitjuice-send-button']",
             "button[data-testid='send-button']",
             "button[data-testid*='send']",
+            "button[aria-label*='Submit']",
+            "button[aria-label*='Enviar mensaje']",
             "button[aria-label*='Send']",
             "button[aria-label*='Enviar']",
             "button[aria-label*='send']",
@@ -368,7 +521,11 @@ export namespace Webchat {
             "form button[type='submit']",
           ]
         : [
+            "#composer-submit-button",
+            ".composer-submit-button-color",
+            "button.composer-submit-button-color",
             "button[data-testid*='send']",
+            "button[data-testid='composer-send-button']",
             "button[aria-label*='Send']",
             "button[aria-label*='Enviar']",
             "button[aria-label*='send']",
@@ -376,15 +533,45 @@ export namespace Webchat {
             "form button[type='submit']",
           ]
     for (const item of list) {
+      if (!(await has())) return
       const ok = await page
-        .locator(item)
+        .locator(input)
         .first()
-        .click({ timeout: 1500 })
-        .then(() => true)
+        .evaluate((el, sel) => {
+          const voice = (txt: string) => txt.includes("voice") || txt.includes("voz") || txt.includes("audio")
+          const root = el.closest("form") ?? document
+          const pick = root.querySelector(sel)
+          if (!(pick instanceof HTMLElement)) return false
+          const style = window.getComputedStyle(pick)
+          if (style.display === "none" || style.visibility === "hidden") return false
+          if (pick instanceof HTMLButtonElement && pick.disabled) return false
+          const label = (pick.getAttribute("aria-label") ?? "").toLowerCase()
+          const key = [label, pick.getAttribute("data-testid") ?? "", pick.textContent ?? ""].join(" ").toLowerCase()
+          if (voice(key)) return false
+          pick.click()
+          return true
+        }, item)
         .catch(() => false)
-      if (!ok) continue
+      if (!ok) {
+        const alt = await page
+          .locator(item)
+          .first()
+          .click({ timeout: 2500 })
+          .then(() => true)
+          .catch(() => false)
+        if (!alt) continue
+      }
       log.warn("webchat.run.send_click_fallback", { selector: item })
-      return
+      await page.waitForTimeout(500)
+      const sent = await page
+        .locator(input)
+        .evaluate((el, expected) => {
+          if (el instanceof HTMLTextAreaElement) return !el.value.includes(expected.trim())
+          const val = el.textContent ?? ""
+          return !val.includes(expected.trim())
+        }, val)
+        .catch(() => false)
+      if (sent) return
     }
     const form = await page
       .locator(input)

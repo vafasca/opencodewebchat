@@ -22,6 +22,7 @@ import { Plugin } from "../plugin"
 import PROMPT_PLAN from "../session/prompt/plan.txt"
 import BUILD_SWITCH from "../session/prompt/build-switch.txt"
 import MAX_STEPS from "../session/prompt/max-steps.txt"
+import PROMPT_CODEX from "../session/prompt/codex.txt"
 import { defer } from "../util/defer"
 import { ToolRegistry } from "../tool/registry"
 import { MCP } from "../mcp"
@@ -213,17 +214,13 @@ export namespace SessionPrompt {
     await SessionStatus.set(input.input.sessionID, { type: "busy" })
     await using _ = defer(() => SessionStatus.set(input.input.sessionID, { type: "idle" }))
     const cfg = await Config.get()
-    const txt = input.message.parts
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
-      .join("\n")
-      .trim()
+    const txt = await webchatPrompt(input)
     log.info("prompt.webchat.start", {
       sessionID: input.input.sessionID,
       browser: input.input.webchat?.browser,
       hasText: txt.length > 0,
     })
-    const content = await Webchat.run({
+    let raw = await Webchat.run({
       prompt: txt,
       browser: input.input.webchat?.browser ?? cfg.webchat?.browser ?? "chrome",
       target: input.input.webchat?.target ?? cfg.webchat?.target ?? "chatgpt",
@@ -251,6 +248,46 @@ export namespace SessionPrompt {
         "Prueba: bunx playwright install",
       ].join("\n")
     })
+    const ask = webchatAsk(input.message)
+    const miss = webchatMissing(ask, raw)
+    if (miss.length) {
+      const retry = await Webchat.run({
+        prompt: [
+          "Te faltaron archivos obligatorios en tu respuesta anterior.",
+          `Archivos faltantes: ${miss.join(", ")}`,
+          "Devuelve SOLO esos archivos faltantes en este formato exacto:",
+          "Ruta: <archivo>",
+          "```<lenguaje>",
+          "...contenido completo...",
+          "```",
+          "No repitas archivos ya entregados.",
+        ].join("\n"),
+        browser: input.input.webchat?.browser ?? cfg.webchat?.browser ?? "chrome",
+        target: input.input.webchat?.target ?? cfg.webchat?.target ?? "chatgpt",
+        url: cfg.webchat?.url,
+        timeout: cfg.webchat?.timeout,
+        input: cfg.webchat?.input_selector,
+        response: cfg.webchat?.response_selector,
+        settle: cfg.webchat?.settle,
+        headless: cfg.webchat?.headless,
+      }).catch(() => "")
+      if (retry.trim()) {
+        raw = [raw, "", retry].join("\n")
+      }
+    }
+    const acts = await webchatExec(raw)
+    const save = await webchatSave(raw)
+    const norm = webchatNorm(raw)
+    const content = save.length || acts.length
+      ? [
+          raw,
+          ...(acts.length ? ["", "Acciones ejecutadas automáticamente:", ...acts.map((item) => `- ${item}`)] : []),
+          ...(norm ? ["", "Formato normalizado (compatible):", norm] : []),
+          "",
+          "Archivos creados automáticamente:",
+          ...save.map((item) => `- ${item}`),
+        ].join("\n")
+      : raw
     const model =
       input.message.info.role === "assistant" ? input.message.info.mode : await lastModel(input.input.sessionID)
     const assistant = (await Session.updateMessage({
@@ -294,6 +331,169 @@ export namespace SessionPrompt {
     return {
       info: assistant,
       parts: await MessageV2.parts(assistant.id),
+    }
+  }
+
+  const webchatPrompt = async (input: { input: PromptInput; message: MessageV2.WithParts }) => {
+    const model = await Provider.getModel(input.message.info.model.providerID, input.message.info.model.modelID)
+    const msgs = await MessageV2.filterCompacted(MessageV2.stream(input.input.sessionID))
+    const list = MessageV2.toModelMessages(msgs, model, { stripMedia: true })
+    const user = list
+      .filter((item) => item.role === "user")
+      .at(-1)
+    const ask =
+      !user || typeof user.content === "string"
+        ? (typeof user?.content === "string" ? user.content : "")
+        : user.content
+            .map((part) => (part.type === "text" ? part.text : ""))
+            .filter((item) => item)
+            .join("\n")
+    return [
+      "Sistema base (igual al flujo normal):",
+      PROMPT_CODEX,
+      "",
+      "Contexto importante de ejecución:",
+      `- cwd: ${Instance.directory}`,
+      `- root: ${Instance.worktree}`,
+      `- agent: ${input.message.info.agent}`,
+      `- variant: ${input.message.info.variant ?? "default"}`,
+      "- No incluyas historial previo de chat en esta solicitud.",
+      "- Mantén el mismo estilo de ejecución de ingeniería (acciones concretas, rutas exactas).",
+      "",
+      "Solicitud del usuario:",
+      ask,
+      "",
+      "Instrucciones:",
+      "- Actúa como asistente de ingeniería de software enfocado en ejecutar, no en explicar de más.",
+      "- Evita saludos largos o plantillas; entrega directamente el resultado.",
+      "- Si falta un dato crítico, haz una sola pregunta breve. Si no falta, procede.",
+      "- Si creas o editas archivos, indica rutas exactas y qué hiciste.",
+      "- Si devuelves archivos, usa SIEMPRE este formato por archivo:",
+      "  Ruta: <archivo>",
+      "  ```<lenguaje>",
+      "  ...contenido...",
+      "  ```",
+      "- Opcional avanzado: también puedes devolver un bloque ```opencode-actions con JSON.",
+      '- Formato JSON: {"actions":[{"tool":"write","file":"src/a.txt","content":"hola"}]}',
+    ]
+      .filter((item) => item)
+      .join("\n")
+      .trim()
+  }
+
+  const webchatFiles = (txt: string) => {
+    const out: { file: string; body: string }[] = []
+    const set = new Set<string>()
+    const list = [
+      ...txt.matchAll(/(?:ruta|path|archivo|file)\s*:\s*([^\n`]+?)\s*\n```[\w-]*\n([\s\S]*?)```/gi),
+      ...txt.matchAll(
+        /(?:^|\n)(?:archivo\s*\d+\s*\n)?\s*(?:ruta|path|archivo|file)\s*:\s*([^\n]+)\n+([\s\S]*?)(?=\n(?:archivo\s*\d+\s*\n)?\s*(?:ruta|path|archivo|file)\s*:|\n(?:✔|si quieres|si deseas|si prefieres)|$)/gi,
+      ),
+    ]
+    for (const item of list) {
+      const raw = item[1]?.trim()
+      const body = (item[2] ?? "").replace(/^\s*(html|css|javascript|js|ts)\s*\n+/i, "").trimEnd()
+      if (!raw || !body.trim()) continue
+      const clean = raw.replace(/^["'`]|["'`]$/g, "")
+      const norm = clean.replace(/\\/g, "/")
+      const rel = norm.includes(":/") ? path.basename(norm) : norm.replace(/^\/+/, "")
+      if (!rel || rel === "." || rel === "..") continue
+      const file = path.resolve(Instance.directory, rel)
+      if (!Filesystem.contains(Instance.directory, file)) continue
+      if (set.has(file)) continue
+      set.add(file)
+      out.push({ file, body })
+    }
+    return out
+  }
+
+  const webchatSave = async (txt: string) => {
+    const out: string[] = []
+    for (const item of webchatFiles(txt)) {
+      await Filesystem.write(item.file, item.body)
+      const file = item.file
+      out.push(path.relative(Instance.directory, file) || path.basename(file))
+    }
+    return out
+  }
+
+  const webchatNorm = (txt: string) =>
+    webchatFiles(txt)
+      .map((item) => {
+        const rel = path.relative(Instance.directory, item.file) || path.basename(item.file)
+        const ext = path.extname(rel).replace(".", "").toLowerCase()
+        const lang = ext === "js" ? "javascript" : ext || "text"
+        return [`Ruta: ${rel}`, `\`\`\`${lang}`, item.body, "```"].join("\n")
+      })
+      .join("\n\n")
+
+  const webchatAsk = (msg: MessageV2.WithParts) =>
+    msg.parts
+      .flatMap((item) => (item.type === "text" ? [item.text] : []))
+      .join("\n")
+      .trim()
+
+  const webchatMissing = (ask: string, txt: string) => {
+    const want = (() => {
+      const val = ask.toLowerCase()
+      if (val.includes("html") && val.includes("css") && (val.includes("javascript") || val.includes("js"))) {
+        return ["index.html", "style.css", "script.js"]
+      }
+      return []
+    })()
+    if (!want.length) return []
+    const got = new Set(
+      webchatFiles(txt).map((item) => (path.relative(Instance.directory, item.file) || path.basename(item.file)).toLowerCase()),
+    )
+    return want.filter((item) => !got.has(item))
+  }
+
+  const webchatExec = async (txt: string) => {
+    const out: string[] = []
+    const data = [...txt.matchAll(/```opencode-actions\s*\n([\s\S]*?)```/gi)]
+      .flatMap((item) => parseActions(item[1] ?? ""))
+      .flatMap((item) => item.actions)
+    for (const item of data) {
+      if (item.tool === "write") {
+        const file = path.resolve(Instance.directory, item.file)
+        if (!Filesystem.contains(Instance.directory, file)) continue
+        await Filesystem.write(file, item.content)
+        out.push(`write ${path.relative(Instance.directory, file) || path.basename(file)}`)
+        continue
+      }
+      if (item.tool === "read") {
+        const file = path.resolve(Instance.directory, item.file)
+        if (!Filesystem.contains(Instance.directory, file)) continue
+        const body = await Filesystem.readText(file).catch(() => "")
+        if (!body) continue
+        out.push(`read ${path.relative(Instance.directory, file) || path.basename(file)} (${body.length} chars)`)
+      }
+    }
+    return out
+  }
+
+  const parseActions = (txt: string) => {
+    const item = parseJson(txt)
+    if (!item) return []
+    const schema = z
+      .object({
+        actions: z.array(
+          z.discriminatedUnion("tool", [
+            z.object({ tool: z.literal("write"), file: z.string(), content: z.string() }),
+            z.object({ tool: z.literal("read"), file: z.string() }),
+          ]),
+        ),
+      })
+      .safeParse(item)
+    if (!schema.success) return []
+    return [schema.data]
+  }
+
+  const parseJson = (txt: string) => {
+    try {
+      return JSON.parse(txt)
+    } catch {
+      return undefined
     }
   }
 
