@@ -360,6 +360,13 @@ export namespace SessionPrompt {
       "- Si falta un dato crítico, haz una sola pregunta breve. Si no falta, procede.",
       "- Si creas o editas archivos, indica rutas exactas y qué hiciste.",
       "- Para editar archivos existentes: devuelve SOLO diff unificado (3 líneas de contexto).",
+      "- Formato estricto de edición:",
+      "  Modificación: <archivo>",
+      "  ```diff",
+      "  @@ ...",
+      "  -línea vieja",
+      "  +línea nueva",
+      "  ```",
       "- No reescribas el archivo completo si ya existe.",
       "- Para archivos nuevos: usa formato por archivo:",
       "  Ruta: <archivo>",
@@ -537,6 +544,13 @@ export namespace SessionPrompt {
         .trim()
       if (!file) continue
       out.push({ file, diff: body })
+    }
+    for (const item of txt.matchAll(/(?:modificaci[oó]n|modification)\s*:\s*([^\n]+)\n([\s\S]*?)(?=\n(?:modificaci[oó]n|modification)\s*:|\ncredenciales|\ncomportamiento|\nsi quieres|$)/gi)) {
+      const file = (item[1] ?? "").trim().replace(/\\/g, "/").replace(/^\/+/, "")
+      const body = (item[2] ?? "").trim()
+      if (!file || !body.includes("@@")) continue
+      const diff = body.includes("--- ") && body.includes("+++ ") ? body : [`--- a/${file}`, `+++ b/${file}`, body].join("\n")
+      out.push({ file, diff })
     }
     return out
   }
