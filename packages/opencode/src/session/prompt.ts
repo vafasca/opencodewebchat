@@ -265,11 +265,12 @@ export namespace SessionPrompt {
     const save = await webchatSave(raw)
     const edit = await webchatApply(raw)
     const norm = webchatNorm(raw)
-    const content = save.length || acts.length || edit.length
+    const content = save.length || acts.length || edit.done.length || edit.skip.length
       ? [
           raw,
           ...(acts.length ? ["", "Acciones ejecutadas automáticamente:", ...acts.map((item) => `- ${item}`)] : []),
-          ...(edit.length ? ["", "Ediciones aplicadas automáticamente:", ...edit.map((item) => `- ${item}`)] : []),
+          ...(edit.done.length ? ["", "Ediciones aplicadas automáticamente:", ...edit.done.map((item) => `- ${item}`)] : []),
+          ...(edit.skip.length ? ["", "Ediciones omitidas (diagnóstico):", ...edit.skip.map((item) => `- ${item}`)] : []),
           ...(norm ? ["", "Formato normalizado (compatible):", norm] : []),
           "",
           "Archivos creados automáticamente:",
@@ -510,12 +511,20 @@ export namespace SessionPrompt {
   }
 
   const webchatApply = async (txt: string) => {
-    const out: string[] = []
+    const done: string[] = []
+    const skip: string[] = []
     for (const item of webchatDiffs(txt)) {
       const file = path.resolve(Instance.directory, item.file)
-      if (!Filesystem.contains(Instance.directory, file)) continue
+      const rel = path.relative(Instance.directory, file) || path.basename(file)
+      if (!Filesystem.contains(Instance.directory, file)) {
+        skip.push(`${item.file} -> fuera del workspace`)
+        continue
+      }
       const old = await Filesystem.readText(file).catch(() => "")
-      if (!old) continue
+      if (!old) {
+        skip.push(`${rel} -> archivo vacío o no legible`)
+        continue
+      }
       const next = (() => {
         try {
           return applyPatch(old, item.diff)
@@ -524,11 +533,21 @@ export namespace SessionPrompt {
         }
       })()
       const body = typeof next === "string" ? next : webchatPatchFallback(old, item.diff)
-      if (!body || body === old) continue
+      if (!body) {
+        skip.push(`${rel} -> patch inválido/no aplicable`)
+        continue
+      }
+      if (body === old) {
+        skip.push(`${rel} -> patch sin cambios`)
+        continue
+      }
       await Filesystem.write(file, body)
-      out.push(`edit ${path.relative(Instance.directory, file) || path.basename(file)}`)
+      done.push(`edit ${rel}`)
     }
-    return out
+    if (!done.length && !skip.length) {
+      skip.push("sin bloques diff detectados en la respuesta")
+    }
+    return { done, skip }
   }
 
   const webchatPatchFallback = (txt: string, diff: string) => {
