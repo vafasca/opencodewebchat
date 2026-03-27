@@ -52,6 +52,7 @@ import { decodeDataUrl } from "@/util/data-url"
 import { Process } from "@/util/process"
 import { Config } from "@/config/config"
 import { Webchat } from "@/webchat"
+import { applyPatch } from "diff"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -262,11 +263,13 @@ export namespace SessionPrompt {
       raw = [raw, "", next].join("\n")
     }
     const save = await webchatSave(raw)
+    const edit = await webchatApply(raw)
     const norm = webchatNorm(raw)
-    const content = save.length || acts.length
+    const content = save.length || acts.length || edit.length
       ? [
           raw,
           ...(acts.length ? ["", "Acciones ejecutadas automáticamente:", ...acts.map((item) => `- ${item}`)] : []),
+          ...(edit.length ? ["", "Ediciones aplicadas automáticamente:", ...edit.map((item) => `- ${item}`)] : []),
           ...(norm ? ["", "Formato normalizado (compatible):", norm] : []),
           "",
           "Archivos creados automáticamente:",
@@ -345,6 +348,9 @@ export namespace SessionPrompt {
       "- No incluyas historial previo de chat en esta solicitud.",
       "- Mantén el mismo estilo de ejecución de ingeniería (acciones concretas, rutas exactas).",
       "",
+      "Archivos actuales en disco (fuente de verdad para editar):",
+      ...(await webchatContext()),
+      "",
       "Solicitud del usuario:",
       ask,
       "",
@@ -353,7 +359,9 @@ export namespace SessionPrompt {
       "- Evita saludos largos o plantillas; entrega directamente el resultado.",
       "- Si falta un dato crítico, haz una sola pregunta breve. Si no falta, procede.",
       "- Si creas o editas archivos, indica rutas exactas y qué hiciste.",
-      "- Si devuelves archivos, usa SIEMPRE este formato por archivo:",
+      "- Para editar archivos existentes: devuelve SOLO diff unificado (3 líneas de contexto).",
+      "- No reescribas el archivo completo si ya existe.",
+      "- Para archivos nuevos: usa formato por archivo:",
       "  Ruta: <archivo>",
       "  ```<lenguaje>",
       "  ...contenido...",
@@ -366,6 +374,26 @@ export namespace SessionPrompt {
       .filter((item) => item)
       .join("\n")
       .trim()
+  }
+
+  const webchatContext = async () => {
+    const dir = await fs.readdir(Instance.directory, { withFileTypes: true }).catch(() => [])
+    const file = dir
+      .filter((item) => item.isFile())
+      .map((item) => item.name)
+      .filter((item) => /\.(html|css|js|jsx|ts|tsx|json|md)$/i.test(item))
+      .slice(0, 8)
+    const out = await Promise.all(
+      file.map(async (item) => {
+        const body = await Filesystem.readText(path.join(Instance.directory, item)).catch(() => "")
+        if (!body.trim()) return ""
+        const ext = path.extname(item).replace(".", "").toLowerCase()
+        const lang = ext === "js" ? "javascript" : ext || "text"
+        return [`Ruta: ${item}`, `\`\`\`${lang}`, body.slice(0, 12000), "```"].join("\n")
+      }),
+    )
+    if (out.some((item) => item.trim())) return out.filter((item) => item.trim())
+    return ["(sin archivos detectados en la raíz del proyecto)"]
   }
 
   const webchatFiles = (txt: string) => {
@@ -472,6 +500,45 @@ export namespace SessionPrompt {
       }
     }
     return { actions, results }
+  }
+
+  const webchatApply = async (txt: string) => {
+    const out: string[] = []
+    for (const item of webchatDiffs(txt)) {
+      const file = path.resolve(Instance.directory, item.file)
+      if (!Filesystem.contains(Instance.directory, file)) continue
+      const old = await Filesystem.readText(file).catch(() => "")
+      if (!old) continue
+      const next = applyPatch(old, item.diff)
+      if (typeof next !== "string" || next === old) continue
+      await Filesystem.write(file, next)
+      out.push(`edit ${path.relative(Instance.directory, file) || path.basename(file)}`)
+    }
+    return out
+  }
+
+  const webchatDiffs = (txt: string) => {
+    const out: { file: string; diff: string }[] = []
+    for (const item of txt.matchAll(/(?:ruta|path|archivo|file)\s*:\s*([^\n`]+?)\s*\n```diff\n([\s\S]*?)```/gi)) {
+      const file = (item[1] ?? "").trim().replace(/\\/g, "/").replace(/^\/+/, "")
+      const diff = (item[2] ?? "").trim()
+      if (!file || !diff) continue
+      const patch = diff.startsWith("---") ? diff : [`--- a/${file}`, `+++ b/${file}`, diff].join("\n")
+      out.push({ file, diff: patch })
+    }
+    for (const item of txt.matchAll(/```diff\n([\s\S]*?)```/gi)) {
+      const body = (item[1] ?? "").trim()
+      if (!body.includes("+++ ") || !body.includes("--- ")) continue
+      const file = body
+        .split("\n")
+        .find((row) => row.startsWith("+++ "))
+        ?.replace("+++ ", "")
+        .replace(/^b\//, "")
+        .trim()
+      if (!file) continue
+      out.push({ file, diff: body })
+    }
+    return out
   }
 
   const webchatFollowup = (list: string[], step: number, max: number) =>
