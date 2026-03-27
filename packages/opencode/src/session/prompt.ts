@@ -264,6 +264,30 @@ export namespace SessionPrompt {
     }
     const save = await webchatSave(raw)
     const edit = await webchatApply(raw)
+    const bad = edit.skip
+      .filter((item) => item.includes("patch inválido/no aplicable"))
+      .map((item) => item.split(" -> ")[0]?.trim())
+      .filter((item): item is string => !!item)
+    if (bad.length) {
+      const retry = await run(
+        [
+          "No pude aplicar tus diffs por formato no compatible.",
+          `Devuelve archivos completos SOLO de: ${[...new Set(bad)].join(", ")}`,
+          "Formato obligatorio:",
+          "Ruta: <archivo>",
+          "```<lenguaje>",
+          "...contenido completo actualizado...",
+          "```",
+          "No incluyas explicaciones.",
+        ].join("\n"),
+      ).catch(() => "")
+      if (retry.trim()) {
+        raw = [raw, "", retry].join("\n")
+        const file = await webchatSave(retry)
+        save.push(...file)
+        edit.skip.push(`reintento full-file solicitado para: ${[...new Set(bad)].join(", ")}`)
+      }
+    }
     const norm = webchatNorm(raw)
     const content = save.length || acts.length || edit.done.length || edit.skip.length
       ? [
