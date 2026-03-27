@@ -516,7 +516,13 @@ export namespace SessionPrompt {
       if (!Filesystem.contains(Instance.directory, file)) continue
       const old = await Filesystem.readText(file).catch(() => "")
       if (!old) continue
-      const next = applyPatch(old, item.diff)
+      const next = (() => {
+        try {
+          return applyPatch(old, item.diff)
+        } catch {
+          return false
+        }
+      })()
       if (typeof next !== "string" || next === old) continue
       await Filesystem.write(file, next)
       out.push(`edit ${path.relative(Instance.directory, file) || path.basename(file)}`)
@@ -526,15 +532,24 @@ export namespace SessionPrompt {
 
   const webchatDiffs = (txt: string) => {
     const out: { file: string; diff: string }[] = []
+    const norm = (txt: string) => {
+      const rows = txt
+        .split("\n")
+        .map((item) => item.trimEnd())
+        .filter((item) => item.trim())
+      const idx = rows.findIndex((item) => item.startsWith("--- ") || item.startsWith("@@ "))
+      const body = idx > 0 ? rows.slice(idx).join("\n") : rows.join("\n")
+      return body.replace(/^diff\s*\n/i, "").trim()
+    }
     for (const item of txt.matchAll(/(?:ruta|path|archivo|file)\s*:\s*([^\n`]+?)\s*\n```diff\n([\s\S]*?)```/gi)) {
       const file = (item[1] ?? "").trim().replace(/\\/g, "/").replace(/^\/+/, "")
-      const diff = (item[2] ?? "").trim()
+      const diff = norm(item[2] ?? "")
       if (!file || !diff) continue
       const patch = diff.startsWith("---") ? diff : [`--- a/${file}`, `+++ b/${file}`, diff].join("\n")
       out.push({ file, diff: patch })
     }
     for (const item of txt.matchAll(/```diff\n([\s\S]*?)```/gi)) {
-      const body = (item[1] ?? "").trim()
+      const body = norm(item[1] ?? "")
       if (!body.includes("+++ ") || !body.includes("--- ")) continue
       const file = body
         .split("\n")
@@ -547,7 +562,7 @@ export namespace SessionPrompt {
     }
     for (const item of txt.matchAll(/(?:modificaci[oó]n|modification)\s*:\s*([^\n]+)\n([\s\S]*?)(?=\n(?:modificaci[oó]n|modification)\s*:|\ncredenciales|\ncomportamiento|\nsi quieres|$)/gi)) {
       const file = (item[1] ?? "").trim().replace(/\\/g, "/").replace(/^\/+/, "")
-      const body = (item[2] ?? "").trim()
+      const body = norm(item[2] ?? "")
       if (!file || !body.includes("@@")) continue
       const diff = body.includes("--- ") && body.includes("+++ ") ? body : [`--- a/${file}`, `+++ b/${file}`, body].join("\n")
       out.push({ file, diff })
