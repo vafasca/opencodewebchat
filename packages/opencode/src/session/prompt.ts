@@ -260,7 +260,6 @@ export namespace SessionPrompt {
       if (!next.trim()) break
       raw = [raw, "", next].join("\n")
     }
-    raw = [raw, "", webchatStop()].join("\n")
     const end = await run(webchatStop()).catch(() => "")
     if (end.trim()) raw = [raw, "", end].join("\n")
     const ask = webchatAsk(input.message)
@@ -391,15 +390,10 @@ export namespace SessionPrompt {
 
   const webchatFiles = (txt: string) => {
     const out = new Map<string, { file: string; body: string }>()
-    const list = [
-      ...txt.matchAll(/(?:ruta|path|archivo|file)\s*:\s*([^\n`]+?)\s*\n```[\w-]*\n([\s\S]*?)```/gi),
-      ...txt.matchAll(
-        /(?:^|\n)(?:archivo\s*\d+\s*\n)?\s*(?:ruta|path|archivo|file)\s*:\s*([^\n]+)\n+([\s\S]*?)(?=\n(?:archivo\s*\d+\s*\n)?\s*(?:ruta|path|archivo|file)\s*:|\n(?:✔|si quieres|si deseas|si prefieres)|$)/gi,
-      ),
-    ]
+    const list = [...txt.matchAll(/(?:ruta|path|archivo|file)\s*:\s*([^\n`]+?)\s*\n```[\w-]*\n([\s\S]*?)```/gi)]
     for (const item of list) {
       const raw = item[1]?.trim()
-      const body = (item[2] ?? "").replace(/^\s*(html|css|javascript|js|ts)\s*\n+/i, "").trimEnd()
+      const body = webchatBody((item[2] ?? "").replace(/^\s*(html|css|javascript|js|ts)\s*\n+/i, "").trimEnd())
       if (!raw || !body.trim()) continue
       const clean = raw.replace(/^["'`]|["'`]$/g, "")
       const norm = clean.replace(/\\/g, "/")
@@ -411,6 +405,15 @@ export namespace SessionPrompt {
       out.set(file, { file, body })
     }
     return [...out.values()]
+  }
+
+  const webchatBody = (txt: string) => {
+    const trim = txt.trimEnd()
+    if (!trim.includes("\\n")) return trim
+    const rows = trim.split("\\n")
+    if (rows.length < 3) return trim
+    if (!rows.some((item) => item.startsWith("<") || item.includes("{") || item.includes("function"))) return trim
+    return rows.join("\n").replaceAll("\\t", "\t").replaceAll("\\r", "")
   }
 
   const webchatSave = async (txt: string) => {
