@@ -272,20 +272,23 @@ export namespace SessionPrompt {
       const retry = await run(
         [
           "No pude aplicar tus diffs por formato no compatible.",
-          `Devuelve archivos completos SOLO de: ${[...new Set(bad)].join(", ")}`,
-          "Formato obligatorio:",
-          "Ruta: <archivo>",
-          "```<lenguaje>",
-          "...contenido completo actualizado...",
+          `Devuelve SOLO diffs unificados para: ${[...new Set(bad)].join(", ")}`,
+          "Formato obligatorio por archivo:",
+          "```diff",
+          "--- a/<archivo>",
+          "+++ b/<archivo>",
+          "@@ -<inicio>,<cantidad> +<inicio>,<cantidad> @@",
+          "-línea vieja",
+          "+línea nueva",
           "```",
           "No incluyas explicaciones.",
         ].join("\n"),
       ).catch(() => "")
       if (retry.trim()) {
         raw = [raw, "", retry].join("\n")
-        const file = await webchatSave(retry)
-        save.push(...file)
-        edit.skip.push(`reintento full-file solicitado para: ${[...new Set(bad)].join(", ")}`)
+        const fix = await webchatApply(retry)
+        edit.done.push(...fix.done)
+        edit.skip.push(...fix.skip.map((item) => `retry: ${item}`))
       }
     }
     const norm = webchatNorm(raw)
@@ -388,7 +391,9 @@ export namespace SessionPrompt {
       "- Formato estricto de edición:",
       "  Modificación: <archivo>",
       "  ```diff",
-      "  @@ ...",
+      "  --- a/<archivo>",
+      "  +++ b/<archivo>",
+      "  @@ -<inicio>,<cantidad> +<inicio>,<cantidad> @@",
       "  -línea vieja",
       "  +línea nueva",
       "  ```",
