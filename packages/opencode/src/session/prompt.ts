@@ -523,11 +523,40 @@ export namespace SessionPrompt {
           return false
         }
       })()
-      if (typeof next !== "string" || next === old) continue
-      await Filesystem.write(file, next)
+      const body = typeof next === "string" ? next : webchatPatchFallback(old, item.diff)
+      if (!body || body === old) continue
+      await Filesystem.write(file, body)
       out.push(`edit ${path.relative(Instance.directory, file) || path.basename(file)}`)
     }
     return out
+  }
+
+  const webchatPatchFallback = (txt: string, diff: string) => {
+    const chunk = diff
+      .split("\n")
+      .filter((item) => !item.startsWith("--- ") && !item.startsWith("+++ "))
+      .join("\n")
+    const list = chunk.split(/\n@@.*\n/g).filter((item) => item.trim())
+    if (!list.length) return
+    let out = txt
+    let hit = false
+    for (const item of list) {
+      const row = item
+        .split("\n")
+        .filter((item) => item.trim())
+      const old = row
+        .filter((item) => !item.startsWith("+"))
+        .map((item) => (["+", "-", " "].includes(item[0] ?? "") ? item.slice(1) : item))
+        .join("\n")
+      const next = row
+        .filter((item) => !item.startsWith("-"))
+        .map((item) => (["+", "-", " "].includes(item[0] ?? "") ? item.slice(1) : item))
+        .join("\n")
+      if (!old || !out.includes(old)) continue
+      out = out.replace(old, next)
+      hit = true
+    }
+    return hit ? out : undefined
   }
 
   const webchatDiffs = (txt: string) => {
