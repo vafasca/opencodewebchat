@@ -225,6 +225,7 @@ export namespace SessionPrompt {
     const run = async (prompt: string) =>
       Webchat.run({
         prompt,
+        sessionID: input.input.sessionID,
         browser: input.input.webchat?.browser ?? cfg.webchat?.browser ?? "chrome",
         target: input.input.webchat?.target ?? cfg.webchat?.target ?? "chatgpt",
         url: cfg.webchat?.url,

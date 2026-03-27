@@ -53,6 +53,7 @@ export namespace Webchat {
   export type Input = {
     prompt: string
     browser: "chrome" | "edge"
+    sessionID?: string
     target?: "chatgpt" | "claude"
     url?: string
     timeout?: number
@@ -158,7 +159,12 @@ export namespace Webchat {
     const inputs = input.input ? [input.input] : cfg.input
     const outputs = input.response ? [input.response] : cfg.response
     const settle = input.settle ?? 1500
-    const url = input.url ?? cfg.url ?? DEFAULT_URL
+    const saved = await historyGet({
+      sessionID: input.sessionID,
+      target: mode,
+      browser: input.browser,
+    })
+    const url = saved ?? input.url ?? cfg.url ?? DEFAULT_URL
     const channel = input.browser === "edge" ? "msedge" : "chrome"
     log.info("webchat.run.start", {
       target: mode,
@@ -178,6 +184,7 @@ export namespace Webchat {
 
     const node = await nodeRun({
       browser: input.browser,
+      sessionID: input.sessionID,
       target: mode,
       prompt: input.prompt,
       timeout,
@@ -189,6 +196,12 @@ export namespace Webchat {
       storage: storageFile({ target: mode, browser: input.browser }),
     })
     if (node?.ok && "text" in node && node.text) {
+      await historySet({
+        sessionID: input.sessionID,
+        target: mode,
+        browser: input.browser,
+        url: node.url,
+      })
       log.info("webchat.run.node_driver_ok", { target: mode, browser: input.browser, size: node.text.length })
       return node.text
     }
@@ -212,7 +225,7 @@ export namespace Webchat {
     if (!playwright) {
       return "No se pudo cargar Playwright. Instala dependencias y ejecuta: bunx playwright install"
     }
-    const key = `${mode}:${input.browser}:${input.headless ? "headless" : "headed"}`
+    const key = `${mode}:${input.browser}:${input.headless ? "headless" : "headed"}:${input.sessionID ?? "default"}`
     const old = live.get(key)
     const pick =
       old &&
@@ -274,6 +287,7 @@ export namespace Webchat {
     if (!item) {
       const node = await nodeRun({
         browser: input.browser,
+        sessionID: input.sessionID,
         target: mode,
         prompt: input.prompt,
         timeout,
@@ -284,7 +298,15 @@ export namespace Webchat {
         headless: input.headless ?? false,
         storage: storageFile({ target: mode, browser: input.browser }),
       })
-      if (node?.ok && "text" in node && node.text) return node.text
+      if (node?.ok && "text" in node && node.text) {
+        await historySet({
+          sessionID: input.sessionID,
+          target: mode,
+          browser: input.browser,
+          url: node.url,
+        })
+        return node.text
+      }
       return [
         "No se pudo abrir el navegador con Playwright.",
         "Se intentó channel (chrome/msedge), fallback chromium y driver Node.",
@@ -345,6 +367,13 @@ export namespace Webchat {
 
     log.info("webchat.run.done", {
       size: text.length,
+      url: page.url(),
+    })
+    await historySet({
+      sessionID: input.sessionID,
+      target: mode,
+      browser: input.browser,
+      url: page.url(),
     })
     return text
   }
@@ -662,6 +691,44 @@ export namespace Webchat {
   const storageFile = (input: LoginInput) =>
     pathUtil.join(os.homedir(), ".opencode", "webchat", `${input.target}-${input.browser}.json`)
 
+  const historyFile = () => pathUtil.join(os.homedir(), ".opencode", "webchat", "session.json")
+
+  const historyKey = (input: { sessionID: string; target: "chatgpt" | "claude"; browser: "chrome" | "edge" }) =>
+    `${input.sessionID}:${input.target}:${input.browser}`
+
+  const historyAll = async () => {
+    const txt = await Bun.file(historyFile()).text().catch(() => "")
+    if (!txt.trim()) return {} as Record<string, string>
+    const val = await Promise.resolve(JSON.parse(txt)).catch(() => undefined)
+    if (!val || typeof val !== "object" || Array.isArray(val)) return {} as Record<string, string>
+    return Object.fromEntries(
+      Object.entries(val).filter((item): item is [string, string] => typeof item[0] === "string" && typeof item[1] === "string"),
+    )
+  }
+
+  const historyGet = async (input: {
+    sessionID?: string
+    target: "chatgpt" | "claude"
+    browser: "chrome" | "edge"
+  }) => {
+    if (!input.sessionID) return
+    return (await historyAll())[historyKey({ sessionID: input.sessionID, target: input.target, browser: input.browser })]
+  }
+
+  const historySet = async (input: {
+    sessionID?: string
+    target: "chatgpt" | "claude"
+    browser: "chrome" | "edge"
+    url?: string
+  }) => {
+    if (!input.sessionID || !input.url || !/^https:\/\/chatgpt\.com\/c\//.test(input.url)) return
+    const file = historyFile()
+    const data = await historyAll()
+    data[historyKey({ sessionID: input.sessionID, target: input.target, browser: input.browser })] = input.url
+    await mkdir(pathUtil.dirname(file), { recursive: true })
+    await Bun.write(file, JSON.stringify(data))
+  }
+
   const pidFile = (input: LoginInput) => pathUtil.join(os.homedir(), ".opencode", "webchat", `${input.target}-${input.browser}.pid`)
 
   const pidAlive = async (input: LoginInput) => {
@@ -737,6 +804,7 @@ export namespace Webchat {
 
   const nodeRun = async (input: {
     browser: "chrome" | "edge"
+    sessionID?: string
     target: "chatgpt" | "claude"
     prompt: string
     timeout: number
@@ -767,7 +835,7 @@ export namespace Webchat {
     }
     if (err.trim()) log.warn("webchat.run.node_driver.stderr", { err })
     const data = await Promise.resolve(JSON.parse(out || "{}"))
-      .then((x) => x as { ok?: boolean; text?: string; error?: string })
+      .then((x) => x as { ok?: boolean; text?: string; error?: string; url?: string })
       .catch((parseErr) => {
         const txt = parseErr instanceof Error ? parseErr.message : String(parseErr)
         log.error("webchat.run.node_driver.parse_failed", { txt, out })
