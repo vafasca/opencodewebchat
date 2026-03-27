@@ -273,14 +273,8 @@ export namespace SessionPrompt {
         [
           "No pude aplicar tus diffs por formato no compatible.",
           `Devuelve SOLO diffs unificados para: ${[...new Set(bad)].join(", ")}`,
-          "Formato obligatorio por archivo:",
-          "```diff",
-          "--- a/<archivo>",
-          "+++ b/<archivo>",
-          "@@ -<inicio>,<cantidad> +<inicio>,<cantidad> @@",
-          "-línea vieja",
-          "+línea nueva",
-          "```",
+          "Si no puedes dar diff canónico, usa opencode-actions con tool edit.",
+          'Formato recomendado: {"actions":[{"tool":"edit","file":"index.html","oldString":"...","newString":"..."}]}',
           "No incluyas explicaciones.",
         ].join("\n"),
       ).catch(() => "")
@@ -388,6 +382,8 @@ export namespace SessionPrompt {
       "- Si falta un dato crítico, haz una sola pregunta breve. Si no falta, procede.",
       "- Si creas o editas archivos, indica rutas exactas y qué hiciste.",
       "- Para editar archivos existentes: devuelve SOLO diff unificado (3 líneas de contexto).",
+      "- Alternativa recomendada (más estable): usa ```opencode-actions con tool edit.",
+      '- Formato edit: {"actions":[{"tool":"edit","file":"index.html","oldString":"...","newString":"..."}]}',
       "- Formato estricto de edición:",
       "  Modificación: <archivo>",
       "  ```diff",
@@ -404,7 +400,7 @@ export namespace SessionPrompt {
       "  ...contenido...",
       "  ```",
       "- Si necesitas herramientas, devuelve SOLO un bloque ```opencode-actions con JSON válido.",
-      "- Herramientas soportadas: write, read, bash.",
+      "- Herramientas soportadas: write, read, edit, bash.",
       '- Formato JSON: {"actions":[{"tool":"bash","cmd":"ls -la"}]}',
       "- Espera el resultado de herramientas antes de dar la respuesta final.",
     ]
@@ -518,6 +514,23 @@ export namespace SessionPrompt {
         const rel = path.relative(Instance.directory, file) || path.basename(file)
         actions.push(`read ${rel} (${body.length} chars)`)
         results.push(`tool: read\nfile: ${rel}\nstatus: ok\noutput:\n${body}`)
+        continue
+      }
+      if (item.tool === "edit") {
+        const file = path.resolve(Instance.directory, item.file)
+        if (!Filesystem.contains(Instance.directory, file)) continue
+        const old = await Filesystem.readText(file).catch(() => "")
+        if (!old) continue
+        const src = old.replace(/\r\n/g, "\n")
+        if (!src.includes(item.oldString)) {
+          actions.push(`edit ${item.file} (sin match oldString)`)
+          results.push(`tool: edit\nfile: ${item.file}\nstatus: error\nreason: oldString no encontrado`)
+          continue
+        }
+        await Filesystem.write(file, src.replace(item.oldString, item.newString))
+        const rel = path.relative(Instance.directory, file) || path.basename(file)
+        actions.push(`edit ${rel}`)
+        results.push(`tool: edit\nfile: ${rel}\nstatus: ok`)
         continue
       }
       if (item.tool === "bash") {
@@ -669,6 +682,7 @@ export namespace SessionPrompt {
           z.discriminatedUnion("tool", [
             z.object({ tool: z.literal("write"), file: z.string(), content: z.string() }),
             z.object({ tool: z.literal("read"), file: z.string() }),
+            z.object({ tool: z.literal("edit"), file: z.string(), oldString: z.string(), newString: z.string() }),
             z.object({ tool: z.literal("bash"), cmd: z.string() }),
           ]),
         ),
