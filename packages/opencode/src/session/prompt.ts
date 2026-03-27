@@ -525,19 +525,20 @@ export namespace SessionPrompt {
         skip.push(`${rel} -> archivo vacío o no legible`)
         continue
       }
+      const src = old.replace(/\r\n/g, "\n")
       const next = (() => {
         try {
-          return applyPatch(old, item.diff)
+          return applyPatch(src, item.diff)
         } catch {
           return false
         }
       })()
-      const body = typeof next === "string" ? next : webchatPatchFallback(old, item.diff)
+      const body = typeof next === "string" ? next : webchatPatchFallback(src, item.diff)
       if (!body) {
         skip.push(`${rel} -> patch inválido/no aplicable`)
         continue
       }
-      if (body === old) {
+      if (body === src) {
         skip.push(`${rel} -> patch sin cambios`)
         continue
       }
@@ -582,6 +583,8 @@ export namespace SessionPrompt {
     const out: { file: string; diff: string }[] = []
     const norm = (txt: string) => {
       const rows = txt
+        .replaceAll("\\n", "\n")
+        .replaceAll("\\t", "\t")
         .split("\n")
         .map((item) => item.trimEnd())
         .filter((item) => item.trim())
