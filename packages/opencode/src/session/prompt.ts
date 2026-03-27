@@ -260,27 +260,6 @@ export namespace SessionPrompt {
       if (!next.trim()) break
       raw = [raw, "", next].join("\n")
     }
-    const end = await run(webchatStop()).catch(() => "")
-    if (end.trim()) raw = [raw, "", end].join("\n")
-    const ask = webchatAsk(input.message)
-    const miss = webchatMissing(ask, raw)
-    if (miss.length) {
-      const retry = await run(
-        [
-          "Te faltaron archivos obligatorios en tu respuesta anterior.",
-          `Archivos faltantes: ${miss.join(", ")}`,
-          "Devuelve SOLO esos archivos faltantes en este formato exacto:",
-          "Ruta: <archivo>",
-          "```<lenguaje>",
-          "...contenido completo...",
-          "```",
-          "No repitas archivos ya entregados.",
-        ].join("\n"),
-      ).catch(() => "")
-      if (retry.trim()) {
-        raw = [raw, "", retry].join("\n")
-      }
-    }
     const save = await webchatSave(raw)
     const norm = webchatNorm(raw)
     const content = save.length || acts.length
@@ -391,7 +370,15 @@ export namespace SessionPrompt {
   const webchatFiles = (txt: string) => {
     const out = new Map<string, { file: string; body: string }>()
     const list = [...txt.matchAll(/(?:ruta|path|archivo|file)\s*:\s*([^\n`]+?)\s*\n```[\w-]*\n([\s\S]*?)```/gi)]
-    for (const item of list) {
+    const plain =
+      list.length > 0
+        ? []
+        : [
+            ...txt.matchAll(
+              /(?:^|\n)\s*(?:ruta|path|archivo|file)\s*:\s*([^\n`]+?)\s*\n([\s\S]*?)(?=\n\s*(?:ruta|path|archivo|file)\s*:|$)/gi,
+            ),
+          ]
+    for (const item of [...list, ...plain]) {
       const raw = item[1]?.trim()
       const body = webchatBody((item[2] ?? "").replace(/^\s*(html|css|javascript|js|ts)\s*\n+/i, "").trimEnd())
       if (!raw || !body.trim()) continue
@@ -408,7 +395,12 @@ export namespace SessionPrompt {
   }
 
   const webchatBody = (txt: string) => {
-    const trim = txt.trimEnd()
+    const trim = txt
+      .split("\n")
+      .filter((item) => !/^\s*(cierre de ciclo:|si ya no necesitas herramientas|no incluyas texto meta|entendido\.?)\s*$/i.test(item))
+      .join("\n")
+      .replace(/\n\s*posibles siguientes mejoras[\s\S]*$/i, "")
+      .trimEnd()
     if (!trim.includes("\\n")) return trim
     const rows = trim.split("\\n")
     if (rows.length < 3) return trim
@@ -435,27 +427,6 @@ export namespace SessionPrompt {
         return [`Ruta: ${rel}`, `\`\`\`${lang}`, item.body, "```"].join("\n")
       })
       .join("\n\n")
-
-  const webchatAsk = (msg: MessageV2.WithParts) =>
-    msg.parts
-      .flatMap((item) => (item.type === "text" ? [item.text] : []))
-      .join("\n")
-      .trim()
-
-  const webchatMissing = (ask: string, txt: string) => {
-    const want = (() => {
-      const val = ask.toLowerCase()
-      if (val.includes("html") && val.includes("css") && (val.includes("javascript") || val.includes("js"))) {
-        return ["index.html", "style.css", "script.js"]
-      }
-      return []
-    })()
-    if (!want.length) return []
-    const got = new Set(
-      webchatFiles(txt).map((item) => (path.relative(Instance.directory, item.file) || path.basename(item.file)).toLowerCase()),
-    )
-    return want.filter((item) => !got.has(item))
-  }
 
   const webchatExec = async (txt: string) => {
     const actions: string[] = []
@@ -510,13 +481,6 @@ export namespace SessionPrompt {
       "Continúa el flujo agéntico.",
       "Si necesitas más herramientas, devuelve SOLO ```opencode-actions.",
       "Si ya terminaste, devuelve respuesta final + archivos en formato Ruta/código.",
-    ].join("\n")
-
-  const webchatStop = () =>
-    [
-      "Cierre de ciclo:",
-      "Si ya no necesitas herramientas, entrega ahora la respuesta final y los archivos.",
-      "No incluyas texto meta; solo resultado final.",
     ].join("\n")
 
   const parseActions = (txt: string) => {
