@@ -671,7 +671,6 @@ export namespace SessionPrompt {
 
   const parseActions = (txt: string) => {
     const item = parseJson(txt)
-    if (!item) return []
     const schema = z
       .object({
         actions: z.array(
@@ -683,10 +682,54 @@ export namespace SessionPrompt {
           ]),
         ),
       })
-      .safeParse(item)
-    if (!schema.success) return []
-    return [schema.data]
+    if (item) {
+      const ok = schema.safeParse(item)
+      if (ok.success) return [ok.data]
+    }
+    const list = parseActionsLoose(txt)
+    if (!list.length) return []
+    const ok = schema.safeParse({ actions: list })
+    if (!ok.success) return []
+    return [ok.data]
   }
+
+  const parseActionsLoose = (txt: string) => {
+    const out: {
+      tool: "write" | "read" | "edit" | "bash"
+      file?: string
+      content?: string
+      oldString?: string
+      newString?: string
+      cmd?: string
+    }[] = []
+    for (const item of txt.matchAll(
+      /"tool"\s*:\s*"edit"\s*,\s*"file"\s*:\s*"([^"]+)"\s*,\s*"oldString"\s*:\s*"([\s\S]*?)"\s*,\s*"newString"\s*:\s*"([\s\S]*?)"\s*}(?=\s*,\s*{|\s*]\s*})/g,
+    )) {
+      out.push({
+        tool: "edit",
+        file: item[1],
+        oldString: parseActionsText(item[2] ?? ""),
+        newString: parseActionsText(item[3] ?? ""),
+      })
+    }
+    for (const item of txt.matchAll(/"tool"\s*:\s*"read"\s*,\s*"file"\s*:\s*"([^"]+)"/g)) {
+      out.push({ tool: "read", file: item[1] })
+    }
+    for (const item of txt.matchAll(/"tool"\s*:\s*"write"\s*,\s*"file"\s*:\s*"([^"]+)"\s*,\s*"content"\s*:\s*"([\s\S]*?)"\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
+      out.push({ tool: "write", file: item[1], content: parseActionsText(item[2] ?? "") })
+    }
+    for (const item of txt.matchAll(/"tool"\s*:\s*"bash"\s*,\s*"cmd"\s*:\s*"([\s\S]*?)"\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
+      out.push({ tool: "bash", cmd: parseActionsText(item[1] ?? "") })
+    }
+    return out
+  }
+
+  const parseActionsText = (txt: string) =>
+    txt
+      .replace(/\\"/g, '"')
+      .replace(/\\n/g, "\n")
+      .replace(/\\r/g, "\r")
+      .replace(/\\t/g, "\t")
 
   const parseJson = (txt: string) => {
     try {
