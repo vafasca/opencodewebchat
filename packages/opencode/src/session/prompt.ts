@@ -264,7 +264,6 @@ export namespace SessionPrompt {
       raw = [raw, "", next].join("\n")
       now = next
     }
-    const save = await webchatSave(raw)
     const edit = await webchatApply(raw)
     const bad = edit.skip
       .filter((item) => item.includes("patch inválido/no aplicable"))
@@ -288,6 +287,7 @@ export namespace SessionPrompt {
         edit.skip.push(...fix.skip.map((item) => `retry: ${item}`))
       }
     }
+    const save = acts.length || edit.done.length ? [] : await webchatSave(raw)
     const norm = webchatNorm(raw)
     const content = save.length || acts.length || edit.done.length || edit.skip.length
       ? [
