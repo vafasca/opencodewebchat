@@ -489,6 +489,12 @@ export namespace SessionPrompt {
     const data = [...txt.matchAll(/```opencode-actions\s*\n([\s\S]*?)```/gi)]
       .flatMap((item) => parseActions(item[1] ?? ""))
       .flatMap((item) => item.actions)
+    if (!data.length) {
+      data.push(
+        ...parseActions(txt)
+          .flatMap((item) => item.actions),
+      )
+    }
     for (const item of data) {
       if (item.tool === "write") {
         const file = path.resolve(Instance.directory, item.file)
@@ -579,9 +585,6 @@ export namespace SessionPrompt {
       }
       await Filesystem.write(file, body)
       done.push(`edit ${rel}`)
-    }
-    if (!done.length && !skip.length) {
-      skip.push("sin bloques diff detectados en la respuesta")
     }
     return { done, skip }
   }
@@ -689,7 +692,36 @@ export namespace SessionPrompt {
     try {
       return JSON.parse(txt)
     } catch {
-      return undefined
+      const fix = [...txt].reduce(
+        (acc, char) => {
+          if (!acc.str) {
+            if (char === '"') return { ...acc, out: `${acc.out}${char}`, str: true }
+            return { ...acc, out: `${acc.out}${char}` }
+          }
+          if (acc.esc) return { ...acc, out: `${acc.out}${char}`, esc: false }
+          if (char === "\\") return { ...acc, out: `${acc.out}${char}`, esc: true }
+          if (char === '"') return { ...acc, out: `${acc.out}${char}`, str: false }
+          if (char === "\r") return acc
+          if (char === "\n") return { ...acc, out: `${acc.out}\\n` }
+          if (char === "\t") return { ...acc, out: `${acc.out}\\t` }
+          if (char === "\b") return { ...acc, out: `${acc.out}\\b` }
+          if (char === "\f") return { ...acc, out: `${acc.out}\\f` }
+          if (char === "\u0000") return { ...acc, out: `${acc.out}\\u0000` }
+          if (char === "\u000b") return { ...acc, out: `${acc.out}\\u000b` }
+          if (char === "\u2028") return { ...acc, out: `${acc.out}\\u2028` }
+          if (char === "\u2029") return { ...acc, out: `${acc.out}\\u2029` }
+          if (char < " " && !["\n", "\r", "\t", "\b", "\f"].includes(char)) {
+            return { ...acc, out: `${acc.out}\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}` }
+          }
+          return { ...acc, out: `${acc.out}${char}` }
+        },
+        { out: "", str: false, esc: false },
+      ).out
+      try {
+        return JSON.parse(fix)
+      } catch {
+        return undefined
+      }
     }
   }
 
