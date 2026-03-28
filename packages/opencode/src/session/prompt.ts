@@ -254,13 +254,15 @@ export namespace SessionPrompt {
         "Prueba: bunx playwright install",
       ].join("\n")
     })
+    let now = raw
     for (let i = 0; i < max; i++) {
-      const item = await webchatExec(raw)
+      const item = await webchatExec(now)
       if (!item.actions.length) break
       acts.push(...item.actions)
       const next = await run(webchatFollowup(item.results, i + 1, max)).catch(() => "")
       if (!next.trim()) break
       raw = [raw, "", next].join("\n")
+      now = next
     }
     const save = await webchatSave(raw)
     const edit = await webchatApply(raw)
