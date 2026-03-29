@@ -742,6 +742,12 @@ export namespace SessionPrompt {
     try {
       return JSON.parse(txt)
     } catch {
+      const chunk = parseJsonChunk(txt)
+      if (chunk) {
+        try {
+          return JSON.parse(chunk)
+        } catch {}
+      }
       const fix = [...txt].reduce(
         (acc, char) => {
           if (!acc.str) {
@@ -770,9 +776,53 @@ export namespace SessionPrompt {
       try {
         return JSON.parse(fix)
       } catch {
+        const chunk = parseJsonChunk(fix)
+        if (chunk) {
+          try {
+            return JSON.parse(chunk)
+          } catch {}
+        }
         return undefined
       }
     }
+  }
+
+  const parseJsonChunk = (txt: string) => {
+    const start = [...txt].findIndex((item) => item === "{" || item === "[")
+    if (start < 0) return
+    let out = ""
+    let str = false
+    let esc = false
+    let dep = 0
+    let end = -1
+    for (let i = start; i < txt.length; i++) {
+      const char = txt[i] ?? ""
+      out += char
+      if (str) {
+        if (esc) {
+          esc = false
+          continue
+        }
+        if (char === "\\") {
+          esc = true
+          continue
+        }
+        if (char === '"') str = false
+        continue
+      }
+      if (char === '"') {
+        str = true
+        continue
+      }
+      if (char === "{" || char === "[") dep++
+      if (char === "}" || char === "]") dep--
+      if (dep === 0) {
+        end = i
+        break
+      }
+    }
+    if (end < 0) return
+    return out
   }
 
   export async function resolvePromptParts(template: string): Promise<PromptInput["parts"]> {
