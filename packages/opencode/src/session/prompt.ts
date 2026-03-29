@@ -259,6 +259,7 @@ export namespace SessionPrompt {
       const item = await webchatExec(now)
       if (!item.actions.length) break
       acts.push(...item.actions)
+      if (!item.more) break
       const next = await run(webchatFollowup(item.results, i + 1, max)).catch(() => "")
       if (!next.trim()) break
       raw = [raw, "", next].join("\n")
@@ -488,6 +489,7 @@ export namespace SessionPrompt {
   const webchatExec = async (txt: string) => {
     const actions: string[] = []
     const results: string[] = []
+    let more = false
     const data = [...txt.matchAll(/```opencode-actions\s*\n([\s\S]*?)```/gi)]
       .flatMap((item) => parseActions(item[1] ?? ""))
       .flatMap((item) => item.actions)
@@ -508,6 +510,7 @@ export namespace SessionPrompt {
         continue
       }
       if (item.tool === "read") {
+        more = true
         const file = path.resolve(Instance.directory, item.file)
         if (!Filesystem.contains(Instance.directory, file)) continue
         const body = await Filesystem.readText(file).catch(() => "")
@@ -524,6 +527,7 @@ export namespace SessionPrompt {
         if (!old) continue
         const src = old.replace(/\r\n/g, "\n")
         if (!src.includes(item.oldString)) {
+          more = true
           actions.push(`edit ${item.file} (sin match oldString)`)
           results.push(`tool: edit\nfile: ${item.file}\nstatus: error\nreason: oldString no encontrado`)
           continue
@@ -535,6 +539,7 @@ export namespace SessionPrompt {
         continue
       }
       if (item.tool === "bash") {
+        more = true
         const out = await Process.run([item.cmd], {
           cwd: Instance.directory,
           shell: true,
@@ -550,7 +555,7 @@ export namespace SessionPrompt {
         )
       }
     }
-    return { actions, results }
+    return { actions, results, more }
   }
 
   const webchatApply = async (txt: string) => {
@@ -668,7 +673,7 @@ export namespace SessionPrompt {
       "",
       "Continúa el flujo agéntico.",
       "Si necesitas más herramientas, devuelve SOLO ```opencode-actions.",
-      "Si ya terminaste, devuelve respuesta final + archivos en formato Ruta/código.",
+      "Si ya terminaste, responde breve y NO incluyas fragmentos de código ni bloques Ruta/archivo.",
     ].join("\n")
 
   const parseActions = (txt: string) => {
