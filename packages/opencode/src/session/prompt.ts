@@ -709,6 +709,20 @@ export namespace SessionPrompt {
       newString?: string
       cmd?: string
     }[] = []
+    for (const item of txt.matchAll(/"tool"\s*:\s*"edit"[\s\S]*?}(?=\s*,\s*{|\s*]\s*})/g)) {
+      const row = item[0] ?? ""
+      const file = parseActionsField(row, /"file"\s*:\s*"/, /"\s*,\s*"oldString"\s*:\s*"/)
+      const old = parseActionsField(row, /"oldString"\s*:\s*"/, /"\s*,\s*"newString"\s*:\s*"/)
+      const next = parseActionsTail(row, /"newString"\s*:\s*"/)
+      if (!file || old === undefined || next === undefined) continue
+      out.push({
+        tool: "edit",
+        file,
+        oldString: parseActionsText(old),
+        newString: parseActionsText(next),
+      })
+    }
+    if (out.length) return out
     for (const item of txt.matchAll(
       /"tool"\s*:\s*"edit"\s*,\s*"file"\s*:\s*"([^"]+)"\s*,\s*"oldString"\s*:\s*"([\s\S]*?)"\s*,\s*"newString"\s*:\s*"([\s\S]*?)"\s*}(?=\s*,\s*{|\s*]\s*})/g,
     )) {
@@ -729,6 +743,29 @@ export namespace SessionPrompt {
       out.push({ tool: "bash", cmd: parseActionsText(item[1] ?? "") })
     }
     return out
+  }
+
+  const parseActionsField = (txt: string, head: RegExp, tail: RegExp) => {
+    const from = txt.search(head)
+    if (from < 0) return
+    const a = txt.slice(from)
+    const h = a.match(head)?.[0] ?? ""
+    if (!h) return
+    const body = a.slice(h.length)
+    const b = body.search(tail)
+    if (b < 0) return
+    return body.slice(0, b)
+  }
+
+  const parseActionsTail = (txt: string, head: RegExp) => {
+    const from = txt.search(head)
+    if (from < 0) return
+    const a = txt.slice(from)
+    const h = a.match(head)?.[0] ?? ""
+    if (!h) return
+    const body = a.slice(h.length).trimEnd()
+    if (!body.endsWith('"')) return
+    return body.slice(0, -1)
   }
 
   const parseActionsText = (txt: string) =>
