@@ -265,6 +265,24 @@ export namespace SessionPrompt {
       raw = [raw, "", next].join("\n")
       now = next
     }
+    const miss = !acts.length && !webchatDiffs(raw).length && !webchatFiles(raw).length
+    if (miss && /archivos?\s+cread|se\s+cre[oó]|estructura\s+generada|puedo\s+generar/i.test(raw)) {
+      const retry = await run(
+        [
+          "No aplicaste ningún cambio real en disco.",
+          "Devuelve cambios accionables ahora.",
+          "Opciones válidas:",
+          '1) Bloque ```opencode-actions con write/edit (JSON válido).',
+          "2) Archivos nuevos en formato Ruta + bloque de código completo por archivo.",
+          "No incluyas descripción ni texto de marketing.",
+        ].join("\n"),
+      ).catch(() => "")
+      if (retry.trim()) {
+        raw = [raw, "", retry].join("\n")
+        const item = await webchatExec(retry)
+        acts.push(...item.actions)
+      }
+    }
     const edit = await webchatApply(raw)
     const bad = edit.skip
       .filter((item) => item.includes("patch inválido/no aplicable"))
