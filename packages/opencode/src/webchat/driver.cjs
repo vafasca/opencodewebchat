@@ -519,7 +519,7 @@ const run = async () => {
   }
   await ctx.close().catch(() => undefined)
   await browser.close().catch(() => undefined)
-  return { ok: true, text }
+  return { ok: true, text, url: page.url() }
 }
 
 run()

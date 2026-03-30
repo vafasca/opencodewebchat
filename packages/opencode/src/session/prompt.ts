@@ -52,6 +52,7 @@ import { decodeDataUrl } from "@/util/data-url"
 import { Process } from "@/util/process"
 import { Config } from "@/config/config"
 import { Webchat } from "@/webchat"
+import { applyPatch } from "diff"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -220,17 +221,22 @@ export namespace SessionPrompt {
       browser: input.input.webchat?.browser,
       hasText: txt.length > 0,
     })
-    let raw = await Webchat.run({
-      prompt: txt,
-      browser: input.input.webchat?.browser ?? cfg.webchat?.browser ?? "chrome",
-      target: input.input.webchat?.target ?? cfg.webchat?.target ?? "chatgpt",
-      url: cfg.webchat?.url,
-      timeout: cfg.webchat?.timeout,
-      input: cfg.webchat?.input_selector,
-      response: cfg.webchat?.response_selector,
-      settle: cfg.webchat?.settle,
-      headless: cfg.webchat?.headless,
-    }).catch((err) => {
+    const max = 6
+    const acts: string[] = []
+    const run = async (prompt: string) =>
+      Webchat.run({
+        prompt,
+        sessionID: input.input.sessionID,
+        browser: input.input.webchat?.browser ?? cfg.webchat?.browser ?? "chrome",
+        target: input.input.webchat?.target ?? cfg.webchat?.target ?? "chatgpt",
+        url: cfg.webchat?.url,
+        timeout: cfg.webchat?.timeout,
+        input: cfg.webchat?.input_selector,
+        response: cfg.webchat?.response_selector,
+        settle: cfg.webchat?.settle,
+        headless: cfg.webchat?.headless,
+      })
+    let raw = await run(txt).catch((err) => {
       const txt = err instanceof Error ? err.message : String(err)
       log.error("prompt.webchat.failed", {
         sessionID: input.input.sessionID,
@@ -248,40 +254,44 @@ export namespace SessionPrompt {
         "Prueba: bunx playwright install",
       ].join("\n")
     })
-    const ask = webchatAsk(input.message)
-    const miss = webchatMissing(ask, raw)
-    if (miss.length) {
-      const retry = await Webchat.run({
-        prompt: [
-          "Te faltaron archivos obligatorios en tu respuesta anterior.",
-          `Archivos faltantes: ${miss.join(", ")}`,
-          "Devuelve SOLO esos archivos faltantes en este formato exacto:",
-          "Ruta: <archivo>",
-          "```<lenguaje>",
-          "...contenido completo...",
-          "```",
-          "No repitas archivos ya entregados.",
+    for (let i = 0; i < max; i++) {
+      const item = await webchatExec(raw)
+      if (!item.actions.length) break
+      acts.push(...item.actions)
+      const next = await run(webchatFollowup(item.results, i + 1, max)).catch(() => "")
+      if (!next.trim()) break
+      raw = [raw, "", next].join("\n")
+    }
+    const save = await webchatSave(raw)
+    const edit = await webchatApply(raw)
+    const bad = edit.skip
+      .filter((item) => item.includes("patch inválido/no aplicable"))
+      .map((item) => item.split(" -> ")[0]?.trim())
+      .filter((item): item is string => !!item)
+    if (bad.length) {
+      const retry = await run(
+        [
+          "No pude aplicar tus diffs por formato no compatible.",
+          `Devuelve SOLO diffs unificados para: ${[...new Set(bad)].join(", ")}`,
+          "Si no puedes dar diff canónico, usa opencode-actions con tool edit.",
+          'Formato recomendado: {"actions":[{"tool":"edit","file":"index.html","oldString":"...","newString":"..."}]}',
+          "No incluyas explicaciones.",
         ].join("\n"),
-        browser: input.input.webchat?.browser ?? cfg.webchat?.browser ?? "chrome",
-        target: input.input.webchat?.target ?? cfg.webchat?.target ?? "chatgpt",
-        url: cfg.webchat?.url,
-        timeout: cfg.webchat?.timeout,
-        input: cfg.webchat?.input_selector,
-        response: cfg.webchat?.response_selector,
-        settle: cfg.webchat?.settle,
-        headless: cfg.webchat?.headless,
-      }).catch(() => "")
+      ).catch(() => "")
       if (retry.trim()) {
         raw = [raw, "", retry].join("\n")
+        const fix = await webchatApply(retry)
+        edit.done.push(...fix.done)
+        edit.skip.push(...fix.skip.map((item) => `retry: ${item}`))
       }
     }
-    const acts = await webchatExec(raw)
-    const save = await webchatSave(raw)
     const norm = webchatNorm(raw)
-    const content = save.length || acts.length
+    const content = save.length || acts.length || edit.done.length || edit.skip.length
       ? [
           raw,
           ...(acts.length ? ["", "Acciones ejecutadas automáticamente:", ...acts.map((item) => `- ${item}`)] : []),
+          ...(edit.done.length ? ["", "Ediciones aplicadas automáticamente:", ...edit.done.map((item) => `- ${item}`)] : []),
+          ...(edit.skip.length ? ["", "Ediciones omitidas (diagnóstico):", ...edit.skip.map((item) => `- ${item}`)] : []),
           ...(norm ? ["", "Formato normalizado (compatible):", norm] : []),
           "",
           "Archivos creados automáticamente:",
@@ -360,6 +370,9 @@ export namespace SessionPrompt {
       "- No incluyas historial previo de chat en esta solicitud.",
       "- Mantén el mismo estilo de ejecución de ingeniería (acciones concretas, rutas exactas).",
       "",
+      "Archivos actuales en disco (fuente de verdad para editar):",
+      ...(await webchatContext()),
+      "",
       "Solicitud del usuario:",
       ask,
       "",
@@ -368,31 +381,68 @@ export namespace SessionPrompt {
       "- Evita saludos largos o plantillas; entrega directamente el resultado.",
       "- Si falta un dato crítico, haz una sola pregunta breve. Si no falta, procede.",
       "- Si creas o editas archivos, indica rutas exactas y qué hiciste.",
-      "- Si devuelves archivos, usa SIEMPRE este formato por archivo:",
+      "- Para editar archivos existentes: devuelve SOLO diff unificado (3 líneas de contexto).",
+      "- Alternativa recomendada (más estable): usa ```opencode-actions con tool edit.",
+      '- Formato edit: {"actions":[{"tool":"edit","file":"index.html","oldString":"...","newString":"..."}]}',
+      "- Formato estricto de edición:",
+      "  Modificación: <archivo>",
+      "  ```diff",
+      "  --- a/<archivo>",
+      "  +++ b/<archivo>",
+      "  @@ -<inicio>,<cantidad> +<inicio>,<cantidad> @@",
+      "  -línea vieja",
+      "  +línea nueva",
+      "  ```",
+      "- No reescribas el archivo completo si ya existe.",
+      "- Para archivos nuevos: usa formato por archivo:",
       "  Ruta: <archivo>",
       "  ```<lenguaje>",
       "  ...contenido...",
       "  ```",
-      "- Opcional avanzado: también puedes devolver un bloque ```opencode-actions con JSON.",
-      '- Formato JSON: {"actions":[{"tool":"write","file":"src/a.txt","content":"hola"}]}',
+      "- Si necesitas herramientas, devuelve SOLO un bloque ```opencode-actions con JSON válido.",
+      "- Herramientas soportadas: write, read, edit, bash.",
+      '- Formato JSON: {"actions":[{"tool":"bash","cmd":"ls -la"}]}',
+      "- Espera el resultado de herramientas antes de dar la respuesta final.",
     ]
       .filter((item) => item)
       .join("\n")
       .trim()
   }
 
+  const webchatContext = async () => {
+    const dir = await fs.readdir(Instance.directory, { withFileTypes: true }).catch(() => [])
+    const file = dir
+      .filter((item) => item.isFile())
+      .map((item) => item.name)
+      .filter((item) => /\.(html|css|js|jsx|ts|tsx|json|md)$/i.test(item))
+      .slice(0, 8)
+    const out = await Promise.all(
+      file.map(async (item) => {
+        const body = await Filesystem.readText(path.join(Instance.directory, item)).catch(() => "")
+        if (!body.trim()) return ""
+        const ext = path.extname(item).replace(".", "").toLowerCase()
+        const lang = ext === "js" ? "javascript" : ext || "text"
+        return [`Ruta: ${item}`, `\`\`\`${lang}`, body.slice(0, 12000), "```"].join("\n")
+      }),
+    )
+    if (out.some((item) => item.trim())) return out.filter((item) => item.trim())
+    return ["(sin archivos detectados en la raíz del proyecto)"]
+  }
+
   const webchatFiles = (txt: string) => {
-    const out: { file: string; body: string }[] = []
-    const set = new Set<string>()
-    const list = [
-      ...txt.matchAll(/(?:ruta|path|archivo|file)\s*:\s*([^\n`]+?)\s*\n```[\w-]*\n([\s\S]*?)```/gi),
-      ...txt.matchAll(
-        /(?:^|\n)(?:archivo\s*\d+\s*\n)?\s*(?:ruta|path|archivo|file)\s*:\s*([^\n]+)\n+([\s\S]*?)(?=\n(?:archivo\s*\d+\s*\n)?\s*(?:ruta|path|archivo|file)\s*:|\n(?:✔|si quieres|si deseas|si prefieres)|$)/gi,
-      ),
-    ]
-    for (const item of list) {
+    const out = new Map<string, { file: string; body: string }>()
+    const list = [...txt.matchAll(/(?:ruta|path|archivo|file)\s*:\s*([^\n`]+?)\s*\n```[\w-]*\n([\s\S]*?)```/gi)]
+    const plain =
+      list.length > 0
+        ? []
+        : [
+            ...txt.matchAll(
+              /(?:^|\n)\s*(?:ruta|path|archivo|file)\s*:\s*([^\n`]+?)\s*\n([\s\S]*?)(?=\n\s*(?:ruta|path|archivo|file)\s*:|$)/gi,
+            ),
+          ]
+    for (const item of [...list, ...plain]) {
       const raw = item[1]?.trim()
-      const body = (item[2] ?? "").replace(/^\s*(html|css|javascript|js|ts)\s*\n+/i, "").trimEnd()
+      const body = webchatBody((item[2] ?? "").replace(/^\s*(html|css|javascript|js|ts)\s*\n+/i, "").trimEnd())
       if (!raw || !body.trim()) continue
       const clean = raw.replace(/^["'`]|["'`]$/g, "")
       const norm = clean.replace(/\\/g, "/")
@@ -400,11 +450,24 @@ export namespace SessionPrompt {
       if (!rel || rel === "." || rel === "..") continue
       const file = path.resolve(Instance.directory, rel)
       if (!Filesystem.contains(Instance.directory, file)) continue
-      if (set.has(file)) continue
-      set.add(file)
-      out.push({ file, body })
+      if (out.has(file)) out.delete(file)
+      out.set(file, { file, body })
     }
-    return out
+    return [...out.values()]
+  }
+
+  const webchatBody = (txt: string) => {
+    const trim = txt
+      .split("\n")
+      .filter((item) => !/^\s*(cierre de ciclo:|si ya no necesitas herramientas|no incluyas texto meta|entendido\.?)\s*$/i.test(item))
+      .join("\n")
+      .replace(/\n\s*posibles siguientes mejoras[\s\S]*$/i, "")
+      .trimEnd()
+    if (!trim.includes("\\n")) return trim
+    const rows = trim.split("\\n")
+    if (rows.length < 3) return trim
+    if (!rows.some((item) => item.startsWith("<") || item.includes("{") || item.includes("function"))) return trim
+    return rows.join("\n").replaceAll("\\t", "\t").replaceAll("\\r", "")
   }
 
   const webchatSave = async (txt: string) => {
@@ -427,29 +490,9 @@ export namespace SessionPrompt {
       })
       .join("\n\n")
 
-  const webchatAsk = (msg: MessageV2.WithParts) =>
-    msg.parts
-      .flatMap((item) => (item.type === "text" ? [item.text] : []))
-      .join("\n")
-      .trim()
-
-  const webchatMissing = (ask: string, txt: string) => {
-    const want = (() => {
-      const val = ask.toLowerCase()
-      if (val.includes("html") && val.includes("css") && (val.includes("javascript") || val.includes("js"))) {
-        return ["index.html", "style.css", "script.js"]
-      }
-      return []
-    })()
-    if (!want.length) return []
-    const got = new Set(
-      webchatFiles(txt).map((item) => (path.relative(Instance.directory, item.file) || path.basename(item.file)).toLowerCase()),
-    )
-    return want.filter((item) => !got.has(item))
-  }
-
   const webchatExec = async (txt: string) => {
-    const out: string[] = []
+    const actions: string[] = []
+    const results: string[] = []
     const data = [...txt.matchAll(/```opencode-actions\s*\n([\s\S]*?)```/gi)]
       .flatMap((item) => parseActions(item[1] ?? ""))
       .flatMap((item) => item.actions)
@@ -458,7 +501,9 @@ export namespace SessionPrompt {
         const file = path.resolve(Instance.directory, item.file)
         if (!Filesystem.contains(Instance.directory, file)) continue
         await Filesystem.write(file, item.content)
-        out.push(`write ${path.relative(Instance.directory, file) || path.basename(file)}`)
+        const rel = path.relative(Instance.directory, file) || path.basename(file)
+        actions.push(`write ${rel}`)
+        results.push(`tool: write\nfile: ${rel}\nstatus: ok`)
         continue
       }
       if (item.tool === "read") {
@@ -466,11 +511,167 @@ export namespace SessionPrompt {
         if (!Filesystem.contains(Instance.directory, file)) continue
         const body = await Filesystem.readText(file).catch(() => "")
         if (!body) continue
-        out.push(`read ${path.relative(Instance.directory, file) || path.basename(file)} (${body.length} chars)`)
+        const rel = path.relative(Instance.directory, file) || path.basename(file)
+        actions.push(`read ${rel} (${body.length} chars)`)
+        results.push(`tool: read\nfile: ${rel}\nstatus: ok\noutput:\n${body}`)
+        continue
       }
+      if (item.tool === "edit") {
+        const file = path.resolve(Instance.directory, item.file)
+        if (!Filesystem.contains(Instance.directory, file)) continue
+        const old = await Filesystem.readText(file).catch(() => "")
+        if (!old) continue
+        const src = old.replace(/\r\n/g, "\n")
+        if (!src.includes(item.oldString)) {
+          actions.push(`edit ${item.file} (sin match oldString)`)
+          results.push(`tool: edit\nfile: ${item.file}\nstatus: error\nreason: oldString no encontrado`)
+          continue
+        }
+        await Filesystem.write(file, src.replace(item.oldString, item.newString))
+        const rel = path.relative(Instance.directory, file) || path.basename(file)
+        actions.push(`edit ${rel}`)
+        results.push(`tool: edit\nfile: ${rel}\nstatus: ok`)
+        continue
+      }
+      if (item.tool === "bash") {
+        const out = await Process.run([item.cmd], {
+          cwd: Instance.directory,
+          shell: true,
+          timeout: 30_000,
+          nothrow: true,
+        })
+        const body = [out.stdout.toString(), out.stderr.toString()].filter((item) => item.trim()).join("\n")
+        actions.push(`bash ${item.cmd} (exit ${out.code})`)
+        results.push(
+          ["tool: bash", `cmd: ${item.cmd}`, `exit: ${out.code}`, "status: ok", `output:\n${body || "(empty)"}`].join(
+            "\n",
+          ),
+        )
+      }
+    }
+    return { actions, results }
+  }
+
+  const webchatApply = async (txt: string) => {
+    const done: string[] = []
+    const skip: string[] = []
+    for (const item of webchatDiffs(txt)) {
+      const file = path.resolve(Instance.directory, item.file)
+      const rel = path.relative(Instance.directory, file) || path.basename(file)
+      if (!Filesystem.contains(Instance.directory, file)) {
+        skip.push(`${item.file} -> fuera del workspace`)
+        continue
+      }
+      const old = await Filesystem.readText(file).catch(() => "")
+      if (!old) {
+        skip.push(`${rel} -> archivo vacío o no legible`)
+        continue
+      }
+      const src = old.replace(/\r\n/g, "\n")
+      const next = (() => {
+        try {
+          return applyPatch(src, item.diff)
+        } catch {
+          return false
+        }
+      })()
+      const body = typeof next === "string" ? next : webchatPatchFallback(src, item.diff)
+      if (!body) {
+        skip.push(`${rel} -> patch inválido/no aplicable`)
+        continue
+      }
+      if (body === src) {
+        skip.push(`${rel} -> patch sin cambios`)
+        continue
+      }
+      await Filesystem.write(file, body)
+      done.push(`edit ${rel}`)
+    }
+    if (!done.length && !skip.length) {
+      skip.push("sin bloques diff detectados en la respuesta")
+    }
+    return { done, skip }
+  }
+
+  const webchatPatchFallback = (txt: string, diff: string) => {
+    const chunk = diff
+      .split("\n")
+      .filter((item) => !item.startsWith("--- ") && !item.startsWith("+++ "))
+      .join("\n")
+    const list = chunk.split(/\n@@.*\n/g).filter((item) => item.trim())
+    if (!list.length) return
+    let out = txt
+    let hit = false
+    for (const item of list) {
+      const row = item
+        .split("\n")
+        .filter((item) => item.trim())
+      const old = row
+        .filter((item) => !item.startsWith("+"))
+        .map((item) => (["+", "-", " "].includes(item[0] ?? "") ? item.slice(1) : item))
+        .join("\n")
+      const next = row
+        .filter((item) => !item.startsWith("-"))
+        .map((item) => (["+", "-", " "].includes(item[0] ?? "") ? item.slice(1) : item))
+        .join("\n")
+      if (!old || !out.includes(old)) continue
+      out = out.replace(old, next)
+      hit = true
+    }
+    return hit ? out : undefined
+  }
+
+  const webchatDiffs = (txt: string) => {
+    const out: { file: string; diff: string }[] = []
+    const norm = (txt: string) => {
+      const rows = txt
+        .replaceAll("\\n", "\n")
+        .replaceAll("\\t", "\t")
+        .split("\n")
+        .map((item) => item.trimEnd())
+        .filter((item) => item.trim())
+      const idx = rows.findIndex((item) => item.startsWith("--- ") || item.startsWith("@@ "))
+      const body = idx > 0 ? rows.slice(idx).join("\n") : rows.join("\n")
+      return body.replace(/^diff\s*\n/i, "").trim()
+    }
+    for (const item of txt.matchAll(/(?:ruta|path|archivo|file)\s*:\s*([^\n`]+?)\s*\n```diff\n([\s\S]*?)```/gi)) {
+      const file = (item[1] ?? "").trim().replace(/\\/g, "/").replace(/^\/+/, "")
+      const diff = norm(item[2] ?? "")
+      if (!file || !diff) continue
+      const patch = diff.startsWith("---") ? diff : [`--- a/${file}`, `+++ b/${file}`, diff].join("\n")
+      out.push({ file, diff: patch })
+    }
+    for (const item of txt.matchAll(/```diff\n([\s\S]*?)```/gi)) {
+      const body = norm(item[1] ?? "")
+      if (!body.includes("+++ ") || !body.includes("--- ")) continue
+      const file = body
+        .split("\n")
+        .find((row) => row.startsWith("+++ "))
+        ?.replace("+++ ", "")
+        .replace(/^b\//, "")
+        .trim()
+      if (!file) continue
+      out.push({ file, diff: body })
+    }
+    for (const item of txt.matchAll(/(?:modificaci[oó]n|modification)\s*:\s*([^\n]+)\n([\s\S]*?)(?=\n(?:modificaci[oó]n|modification)\s*:|\ncredenciales|\ncomportamiento|\nsi quieres|$)/gi)) {
+      const file = (item[1] ?? "").trim().replace(/\\/g, "/").replace(/^\/+/, "")
+      const body = norm(item[2] ?? "")
+      if (!file || !body.includes("@@")) continue
+      const diff = body.includes("--- ") && body.includes("+++ ") ? body : [`--- a/${file}`, `+++ b/${file}`, body].join("\n")
+      out.push({ file, diff })
     }
     return out
   }
+
+  const webchatFollowup = (list: string[], step: number, max: number) =>
+    [
+      `Resultado de herramientas (paso ${step}/${max}):`,
+      ...list,
+      "",
+      "Continúa el flujo agéntico.",
+      "Si necesitas más herramientas, devuelve SOLO ```opencode-actions.",
+      "Si ya terminaste, devuelve respuesta final + archivos en formato Ruta/código.",
+    ].join("\n")
 
   const parseActions = (txt: string) => {
     const item = parseJson(txt)
@@ -481,6 +682,8 @@ export namespace SessionPrompt {
           z.discriminatedUnion("tool", [
             z.object({ tool: z.literal("write"), file: z.string(), content: z.string() }),
             z.object({ tool: z.literal("read"), file: z.string() }),
+            z.object({ tool: z.literal("edit"), file: z.string(), oldString: z.string(), newString: z.string() }),
+            z.object({ tool: z.literal("bash"), cmd: z.string() }),
           ]),
         ),
       })
