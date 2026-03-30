@@ -585,9 +585,9 @@ export namespace SessionPrompt {
           results.push(`tool: bash\ncmd: ${cmd || "(empty)"}\nstatus: error\nreason: comando bash incompleto o inválido`)
           continue
         }
-        const out = await Process.run([cmd], {
+        const call = process.platform === "win32" ? ["cmd", "/c", cmd] : ["bash", "-lc", cmd]
+        const out = await Process.run(call, {
           cwd: Instance.directory,
-          shell: true,
           timeout: 30_000,
           nothrow: true,
         })
