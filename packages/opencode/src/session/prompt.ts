@@ -223,6 +223,13 @@ export namespace SessionPrompt {
     })
     const max = 6
     const acts: string[] = []
+    const ask = input.message.parts
+      .filter((item) => item.type === "text")
+      .map((item) => item.text)
+      .join("\n")
+      .toLowerCase()
+    const base = await fs.readdir(Instance.directory, { withFileTypes: true }).catch(() => [])
+    const empty = base.filter((item) => item.isFile() || item.isDirectory()).length === 0
     const run = async (prompt: string) =>
       Webchat.run({
         prompt,
@@ -266,6 +273,23 @@ export namespace SessionPrompt {
       now = next
     }
     const miss = !acts.length && !webchatDiffs(raw).length && !webchatFiles(raw).length
+    const app = empty && /(angular|react|vue|next|nuxt|svelte)/i.test(ask)
+    const nobash = app && acts.length && !acts.some((item) => item.startsWith("bash "))
+    if (nobash) {
+      const retry = await run(
+        [
+          "Debes usar scaffold real del framework con bash en este proyecto vacío.",
+          "Devuelve SOLO opencode-actions JSON con pasos bash + edit/write posteriores.",
+          "Ejemplo Angular: ng new <nombre> ... y luego edits en src/.",
+          "No entregues scaffold manual solo con write de archivos sueltos.",
+        ].join("\n"),
+      ).catch(() => "")
+      if (retry.trim()) {
+        raw = [raw, "", retry].join("\n")
+        const item = await webchatExec(retry)
+        acts.push(...item.actions)
+      }
+    }
     if (miss && /archivos?\s+cread|se\s+cre[oó]|estructura\s+generada|puedo\s+generar/i.test(raw)) {
       const retry = await run(
         [
