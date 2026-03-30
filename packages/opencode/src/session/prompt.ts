@@ -487,7 +487,11 @@ export namespace SessionPrompt {
   const webchatSave = async (txt: string) => {
     const out: string[] = []
     for (const item of webchatFiles(txt)) {
-      await Filesystem.write(item.file, item.body)
+      await fs.mkdir(path.dirname(item.file), { recursive: true }).catch(() => undefined)
+      const ok = await Filesystem.write(item.file, item.body)
+        .then(() => true)
+        .catch(() => false)
+      if (!ok) continue
       const file = item.file
       out.push(path.relative(Instance.directory, file) || path.basename(file))
     }
@@ -521,10 +525,19 @@ export namespace SessionPrompt {
       if (item.tool === "write") {
         const file = path.resolve(Instance.directory, item.file)
         if (!Filesystem.contains(Instance.directory, file)) continue
-        await Filesystem.write(file, item.content)
+        await fs.mkdir(path.dirname(file), { recursive: true }).catch(() => undefined)
+        const ok = await Filesystem.write(file, item.content)
+          .then(() => true)
+          .catch(() => false)
         const rel = path.relative(Instance.directory, file) || path.basename(file)
-        actions.push(`write ${rel}`)
-        results.push(`tool: write\nfile: ${rel}\nstatus: ok`)
+        if (ok) {
+          actions.push(`write ${rel}`)
+          results.push(`tool: write\nfile: ${rel}\nstatus: ok`)
+          continue
+        }
+        more = true
+        actions.push(`write ${rel} (error)`)
+        results.push(`tool: write\nfile: ${rel}\nstatus: error\nreason: no se pudo escribir archivo`)
         continue
       }
       if (item.tool === "read") {
