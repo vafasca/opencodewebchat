@@ -275,6 +275,7 @@ export namespace SessionPrompt {
     const miss = !acts.length && !webchatDiffs(raw).length && !webchatFiles(raw).length
     const app = empty && /(angular|react|vue|next|nuxt|svelte)/i.test(ask)
     const nobash = app && acts.length && !acts.some((item) => item.startsWith("bash "))
+    const onlybash = app && acts.length && acts.every((item) => item.startsWith("bash "))
     if (nobash) {
       const retry = await run(
         [
@@ -282,6 +283,21 @@ export namespace SessionPrompt {
           "Devuelve SOLO opencode-actions JSON con pasos bash + edit/write posteriores.",
           "Ejemplo Angular: ng new <nombre> ... y luego edits en src/.",
           "No entregues scaffold manual solo con write de archivos sueltos.",
+        ].join("\n"),
+      ).catch(() => "")
+      if (retry.trim()) {
+        raw = [raw, "", retry].join("\n")
+        const item = await webchatExec(retry)
+        acts.push(...item.actions)
+      }
+    }
+    if (onlybash) {
+      const retry = await run(
+        [
+          "Scaffold detectado.",
+          "Ahora aplica la implementación solicitada con acciones reales edit/write sobre el proyecto creado.",
+          "Devuelve SOLO opencode-actions JSON.",
+          "No respondas con explicación.",
         ].join("\n"),
       ).catch(() => "")
       if (retry.trim()) {
@@ -345,7 +361,9 @@ export namespace SessionPrompt {
         ].join("\n")
       : raw
     const model =
-      input.message.info.role === "assistant" ? input.message.info.mode : await lastModel(input.input.sessionID)
+      input.message.info.role === "assistant"
+        ? input.message.info.mode
+        : await lastModel(input.input.sessionID).catch(() => input.message.info.model.modelID)
     const assistant = (await Session.updateMessage({
       id: MessageID.ascending(),
       parentID: input.message.info.id,
