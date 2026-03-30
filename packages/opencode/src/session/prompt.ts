@@ -416,6 +416,8 @@ export namespace SessionPrompt {
       "- Si necesitas herramientas, devuelve SOLO un bloque ```opencode-actions con JSON válido.",
       "- Herramientas soportadas: write, read, edit, bash.",
       '- Formato JSON: {"actions":[{"tool":"bash","cmd":"ls -la"}]}',
+      "- Si el proyecto está vacío y piden un framework/app completa (Angular/React/Vue/etc), usa bash para scaffold real (ej: ng new, npm create) y luego aplica edit/write sobre ese scaffold.",
+      "- No simules archivos creados: si no ejecutaste acciones reales, no afirmes que creaste archivos.",
       "- Espera el resultado de herramientas antes de dar la respuesta final.",
     ]
       .filter((item) => item)
