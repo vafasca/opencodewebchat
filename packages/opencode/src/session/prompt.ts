@@ -573,16 +573,28 @@ export namespace SessionPrompt {
       }
       if (item.tool === "bash") {
         more = true
-        const out = await Process.run([item.cmd], {
+        const cmd = item.cmd.trim()
+        const bad =
+          !cmd ||
+          /--skip\s*$/i.test(cmd) ||
+          /\\\s*$/.test(cmd) ||
+          cmd.split('"').length % 2 === 0 ||
+          cmd.split("'").length % 2 === 0
+        if (bad) {
+          actions.push(`bash ${cmd || "(empty)"} (invalid)`)
+          results.push(`tool: bash\ncmd: ${cmd || "(empty)"}\nstatus: error\nreason: comando bash incompleto o inválido`)
+          continue
+        }
+        const out = await Process.run([cmd], {
           cwd: Instance.directory,
           shell: true,
           timeout: 30_000,
           nothrow: true,
         })
         const body = [out.stdout.toString(), out.stderr.toString()].filter((item) => item.trim()).join("\n")
-        actions.push(`bash ${item.cmd} (exit ${out.code})`)
+        actions.push(`bash ${cmd} (exit ${out.code})`)
         results.push(
-          ["tool: bash", `cmd: ${item.cmd}`, `exit: ${out.code}`, "status: ok", `output:\n${body || "(empty)"}`].join(
+          ["tool: bash", `cmd: ${cmd}`, `exit: ${out.code}`, "status: ok", `output:\n${body || "(empty)"}`].join(
             "\n",
           ),
         )
