@@ -32,12 +32,28 @@ const normRole = (role: unknown) => {
   return "User"
 }
 
+const pick = (msg: Parameters<LanguageModelV2["doGenerate"]>[0]["prompt"][number]) => {
+  if (Array.isArray(msg.content)) {
+    return msg.content.map((part) => pickText(part) || pickFile(part)).filter(Boolean)
+  }
+  if (typeof msg.content === "string") {
+    const txt = msg.content.trim()
+    return txt ? [txt] : []
+  }
+  if (!msg.content || typeof msg.content !== "object") return []
+  if ("text" in msg.content && typeof msg.content.text === "string") {
+    const txt = msg.content.text.trim()
+    return txt ? [txt] : []
+  }
+  return []
+}
+
 const format = (prompt: Parameters<LanguageModelV2["doGenerate"]>[0]["prompt"], system?: string) => {
   const out: string[] = []
   if (system?.trim()) out.push(`System:\n${system.trim()}`)
   for (const msg of prompt) {
     const role = normRole(msg.role)
-    const chunks = msg.content.map((part) => pickText(part) || pickFile(part)).filter(Boolean)
+    const chunks = pick(msg)
     if (!chunks.length) continue
     out.push(`${role}:\n${chunks.join("\n")}`)
   }
