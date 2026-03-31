@@ -414,12 +414,17 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       return
     }
 
-    const model = currentModel
+    const model = webchatEnabled
       ? {
-          modelID: currentModel.id,
-          providerID: currentModel.provider.id,
+          providerID: "opencode",
+          modelID: `webchat-${input.webchatTarget?.() ?? "chatgpt"}-${input.webchatBrowser?.() ?? "chrome"}`,
         }
-      : undefined
+      : currentModel
+        ? {
+            modelID: currentModel.id,
+            providerID: currentModel.provider.id,
+          }
+        : undefined
     const agent = currentAgent.name
     const context = prompt.context.items().slice()
     const draft: FollowupDraft = {

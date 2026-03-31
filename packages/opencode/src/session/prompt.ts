@@ -203,13 +203,6 @@ export namespace SessionPrompt {
       return message
     }
 
-    if (input.webchat?.enabled === true) {
-      return promptWebchat({
-        input,
-        message,
-      })
-    }
-
     return loop({ sessionID: input.sessionID })
   })
 
@@ -2087,7 +2080,13 @@ export namespace SessionPrompt {
       throw error
     }
 
-    const model = input.model ?? agent.model ?? (await lastModel(input.sessionID))
+    const model =
+      input.webchat?.enabled === true
+        ? {
+            providerID: ProviderID.opencode,
+            modelID: ModelID.make(`webchat-${input.webchat.target ?? "chatgpt"}-${input.webchat.browser ?? "chrome"}`),
+          }
+        : input.model ?? agent.model ?? (await lastModel(input.sessionID))
     const full =
       !input.variant && agent.variant
         ? await Provider.getModel(model.providerID, model.modelID).catch(() => undefined)

@@ -51,6 +51,7 @@ import { GoogleAuth } from "google-auth-library"
 import { ProviderTransform } from "./transform"
 import { Installation } from "../installation"
 import { ModelID, ProviderID } from "./schema"
+import { WebchatLanguageModel } from "./webchat"
 
 export namespace Provider {
   const log = Log.create({ service: "provider" })
@@ -180,6 +181,11 @@ export namespace Provider {
       return {
         autoload: Object.keys(input.models).length > 0,
         options: hasKey ? {} : { apiKey: "public" },
+        async getModel(sdk: any, modelID: string, _options?: Record<string, any>) {
+          if (modelID.startsWith("webchat")) return new WebchatLanguageModel(modelID)
+          if (useLanguageModel(sdk)) return sdk.languageModel(modelID)
+          return sdk.chat ? sdk.chat(modelID) : sdk.responses(modelID)
+        },
       }
     },
     openai: async () => {
@@ -1331,13 +1337,29 @@ export namespace Provider {
     }
 
     const info = provider.models[modelID]
-    if (!info) {
-      const availableModels = Object.keys(provider.models)
-      const matches = fuzzysort.go(modelID, availableModels, { limit: 3, threshold: -10000 })
-      const suggestions = matches.map((m) => m.target)
-      throw new ModelNotFoundError({ providerID, modelID, suggestions })
+    if (info) return info
+
+    if (providerID === ProviderID.opencode && modelID.startsWith("webchat")) {
+      const base = Object.values(provider.models)[0]
+      if (!base) {
+        throw new ModelNotFoundError({ providerID, modelID, suggestions: [] })
+      }
+      return {
+        ...base,
+        id: modelID,
+        name: `Webchat (${modelID.replace(/^webchat-?/, "") || "default"})`,
+        api: {
+          ...base.api,
+          id: modelID,
+        },
+        providerID,
+      }
     }
-    return info
+
+    const availableModels = Object.keys(provider.models)
+    const matches = fuzzysort.go(modelID, availableModels, { limit: 3, threshold: -10000 })
+    const suggestions = matches.map((m) => m.target)
+    throw new ModelNotFoundError({ providerID, modelID, suggestions })
   }
 
   export async function getLanguage(model: Model): Promise<LanguageModelV2> {
