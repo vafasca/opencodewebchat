@@ -866,10 +866,14 @@ export namespace SessionPrompt {
       if (item.tool === "todowrite") {
         more = true
         if (!sessionID) continue
-        await Todo.update({
+        Todo.update({
           sessionID: SessionID.make(sessionID),
-          todos: item.todos,
-        }).catch(() => undefined)
+          todos: item.todos.map((todo) => ({
+            content: todo.content,
+            status: todo.status,
+            priority: todo.priority ?? "medium",
+          })),
+        })
         actions.push(`todowrite ${item.todos.length}`)
         results.push(`tool: todowrite\nstatus: ok`)
         await done("todowrite", "ok")
@@ -878,7 +882,7 @@ export namespace SessionPrompt {
       if (item.tool === "todoread") {
         more = true
         if (!sessionID) continue
-        const todos = await Todo.get(SessionID.make(sessionID)).catch(() => [])
+        const todos = Todo.get(SessionID.make(sessionID))
         actions.push(`todoread ${todos.length}`)
         results.push(`tool: todoread\nstatus: ok\noutput:\n${JSON.stringify(todos, null, 2)}`)
         await done("todoread", JSON.stringify(todos, null, 2))
