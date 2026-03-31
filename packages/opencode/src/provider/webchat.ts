@@ -181,14 +181,36 @@ const pickDesc = (input: Record<string, unknown>) => {
   return head ? `Run: ${head}` : "Run shell command"
 }
 
+
+const rewriteBash = (input: Record<string, unknown>) => {
+  const cmd = typeof input.command === "string" ? input.command.trim() : ""
+  const m = cmd.match(/^cd\s+([^&;]+?)\s*&&\s*(.+)$/)
+  if (!m) return input
+  const dir = m[1]?.trim()
+  const next = m[2]?.trim()
+  if (!dir || !next) return input
+  return {
+    ...input,
+    command: next,
+    workdir: typeof input.workdir === "string" && input.workdir.trim() ? input.workdir : dir,
+  }
+}
+
 const normalizeCall = (call: { tool: string; input: Record<string, unknown> }, tools?: unknown) => {
   const names = pickNames(tools)
   const tool = call.tool === "shell" ? "bash" : call.tool
   const input = { ...call.input }
 
+  if (tool === "apply_patch") {
+    if (typeof input.patchText !== "string" && typeof input.patch === "string") input.patchText = input.patch
+    delete input.patch
+  }
+
   if (tool === "bash") {
     if (typeof input.command !== "string" && typeof input.cmd === "string") input.command = input.cmd
     delete input.cmd
+    const next = rewriteBash(input)
+    Object.assign(input, next)
     if (typeof input.description !== "string") input.description = pickDesc(input)
   }
 
@@ -200,9 +222,7 @@ const normalizeCall = (call: { tool: string; input: Record<string, unknown> }, t
     tool: "invalid",
     input: {
       tool,
-      available: Array.from(names),
-      payload: input,
-      message: `Model tried unavailable tool '${tool}'.`,
+      error: `Model tried unavailable tool '${tool}'. Available tools: ${Array.from(names).join(", ")}. Payload: ${JSON.stringify(input)}`
     },
   }
 }
@@ -214,7 +234,7 @@ const pickCalls = (raw: string, tools?: unknown) => {
   return [
     {
       tool: "invalid",
-      input: { message: raw.trim() || "No actionable tool block found in webchat response" },
+      input: { tool: "unknown", error: raw.trim() || "No actionable tool block found in webchat response" },
     },
   ]
 }
