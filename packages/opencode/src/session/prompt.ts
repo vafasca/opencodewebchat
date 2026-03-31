@@ -53,6 +53,8 @@ import { Process } from "@/util/process"
 import { Config } from "@/config/config"
 import { Webchat } from "@/webchat"
 import { applyPatch } from "diff"
+import { Glob } from "@/util/glob"
+import { Todo } from "./todo"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -263,7 +265,7 @@ export namespace SessionPrompt {
     })
     let now = raw
     for (let i = 0; i < max; i++) {
-      const item = await webchatExec(now)
+      const item = await webchatExec(now, input.input.sessionID)
       if (!item.actions.length) break
       acts.push(...item.actions)
       if (!item.more) break
@@ -287,7 +289,7 @@ export namespace SessionPrompt {
       ).catch(() => "")
       if (retry.trim()) {
         raw = [raw, "", retry].join("\n")
-        const item = await webchatExec(retry)
+        const item = await webchatExec(retry, input.input.sessionID)
         acts.push(...item.actions)
       }
     }
@@ -302,7 +304,7 @@ export namespace SessionPrompt {
       ).catch(() => "")
       if (retry.trim()) {
         raw = [raw, "", retry].join("\n")
-        const item = await webchatExec(retry)
+        const item = await webchatExec(retry, input.input.sessionID)
         acts.push(...item.actions)
       }
     }
@@ -319,7 +321,7 @@ export namespace SessionPrompt {
       ).catch(() => "")
       if (retry.trim()) {
         raw = [raw, "", retry].join("\n")
-        const item = await webchatExec(retry)
+        const item = await webchatExec(retry, input.input.sessionID)
         acts.push(...item.actions)
       }
     }
@@ -456,7 +458,7 @@ export namespace SessionPrompt {
       "  ...contenido...",
       "  ```",
       "- Si necesitas herramientas, devuelve SOLO un bloque ```opencode-actions con JSON válido.",
-      "- Herramientas soportadas: write, read, edit, bash.",
+      "- Herramientas soportadas: write, read, edit, bash, glob, grep, webfetch, todowrite, todoread, invalid.",
       '- Formato JSON: {"actions":[{"tool":"bash","cmd":"ls -la"}]}',
       "- Si el proyecto está vacío y piden un framework/app completa (Angular/React/Vue/etc), usa bash para scaffold real (ej: ng new, npm create) y luego aplica edit/write sobre ese scaffold.",
       "- No simules archivos creados: si no ejecutaste acciones reales, no afirmes que creaste archivos.",
@@ -552,7 +554,7 @@ export namespace SessionPrompt {
       })
       .join("\n\n")
 
-  const webchatExec = async (txt: string) => {
+  const webchatExec = async (txt: string, sessionID?: string) => {
     const actions: string[] = []
     const results: string[] = []
     let more = false
@@ -640,6 +642,61 @@ export namespace SessionPrompt {
             "\n",
           ),
         )
+      }
+      if (item.tool === "glob") {
+        const cwd = item.path ? path.resolve(Instance.directory, item.path) : Instance.directory
+        if (!Filesystem.contains(Instance.directory, cwd)) continue
+        const list = Glob.scanSync(item.pattern, { cwd, dot: true })
+        actions.push(`glob ${item.pattern} (${list.length})`)
+        results.push(`tool: glob\npattern: ${item.pattern}\nstatus: ok\noutput:\n${list.join("\n") || "(empty)"}`)
+        continue
+      }
+      if (item.tool === "grep") {
+        const root = item.path ? path.resolve(Instance.directory, item.path) : Instance.directory
+        if (!Filesystem.contains(Instance.directory, root)) continue
+        const call =
+          process.platform === "win32"
+            ? ["cmd", "/c", `rg -n --hidden --glob !node_modules ${JSON.stringify(item.pattern)} ${JSON.stringify(root)}`]
+            : ["bash", "-lc", `rg -n --hidden --glob '!node_modules' ${JSON.stringify(item.pattern)} ${JSON.stringify(root)}`]
+        const out = await Process.run(call, { cwd: Instance.directory, nothrow: true, timeout: 30_000 })
+        const body = [out.stdout.toString(), out.stderr.toString()].filter((item) => item.trim()).join("\n")
+        actions.push(`grep ${item.pattern} (exit ${out.code})`)
+        results.push(`tool: grep\npattern: ${item.pattern}\nstatus: ok\noutput:\n${body || "(empty)"}`)
+        continue
+      }
+      if (item.tool === "webfetch") {
+        const body = await fetch(item.url)
+          .then((res) => res.text())
+          .then((txt) => txt.slice(0, 20_000))
+          .catch((err) => `error: ${err instanceof Error ? err.message : String(err)}`)
+        actions.push(`webfetch ${item.url}`)
+        results.push(`tool: webfetch\nurl: ${item.url}\nstatus: ok\noutput:\n${body}`)
+        continue
+      }
+      if (item.tool === "todowrite") {
+        more = true
+        if (!sessionID) continue
+        await Todo.update({
+          sessionID: SessionID.construct(sessionID),
+          todos: item.todos,
+        }).catch(() => undefined)
+        actions.push(`todowrite ${item.todos.length}`)
+        results.push(`tool: todowrite\nstatus: ok`)
+        continue
+      }
+      if (item.tool === "todoread") {
+        more = true
+        if (!sessionID) continue
+        const todos = await Todo.get(SessionID.construct(sessionID)).catch(() => [])
+        actions.push(`todoread ${todos.length}`)
+        results.push(`tool: todoread\nstatus: ok\noutput:\n${JSON.stringify(todos, null, 2)}`)
+        continue
+      }
+      if (item.tool === "invalid") {
+        more = true
+        actions.push(`invalid`)
+        results.push(`tool: invalid\nstatus: error\nreason: ${item.message}`)
+        continue
       }
     }
     return { actions, results, more }
@@ -773,6 +830,21 @@ export namespace SessionPrompt {
             z.object({ tool: z.literal("read"), file: z.string() }),
             z.object({ tool: z.literal("edit"), file: z.string(), oldString: z.string(), newString: z.string() }),
             z.object({ tool: z.literal("bash"), cmd: z.string() }),
+            z.object({ tool: z.literal("glob"), pattern: z.string(), path: z.string().optional() }),
+            z.object({ tool: z.literal("grep"), pattern: z.string(), path: z.string().optional() }),
+            z.object({ tool: z.literal("webfetch"), url: z.string() }),
+            z.object({
+              tool: z.literal("todowrite"),
+              todos: z.array(
+                z.object({
+                  content: z.string(),
+                  status: z.enum(["pending", "in_progress", "completed"]),
+                  priority: z.enum(["high", "medium", "low"]).optional(),
+                }),
+              ),
+            }),
+            z.object({ tool: z.literal("todoread") }),
+            z.object({ tool: z.literal("invalid"), message: z.string() }),
           ]),
         ),
       })
@@ -789,12 +861,16 @@ export namespace SessionPrompt {
 
   const parseActionsLoose = (txt: string) => {
     const out: {
-      tool: "write" | "read" | "edit" | "bash"
+      tool: "write" | "read" | "edit" | "bash" | "glob" | "grep" | "webfetch" | "todoread" | "invalid"
       file?: string
       content?: string
       oldString?: string
       newString?: string
       cmd?: string
+      pattern?: string
+      path?: string
+      url?: string
+      message?: string
     }[] = []
     for (const item of txt.matchAll(/"tool"\s*:\s*"edit"[\s\S]*?}(?=\s*,\s*{|\s*]\s*})/g)) {
       const row = item[0] ?? ""
@@ -828,6 +904,21 @@ export namespace SessionPrompt {
     }
     for (const item of txt.matchAll(/"tool"\s*:\s*"bash"\s*,\s*"cmd"\s*:\s*"([\s\S]*?)"\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
       out.push({ tool: "bash", cmd: parseActionsText(item[1] ?? "") })
+    }
+    for (const item of txt.matchAll(/"tool"\s*:\s*"glob"\s*,\s*"pattern"\s*:\s*"([\s\S]*?)"(?:\s*,\s*"path"\s*:\s*"([\s\S]*?)")?\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
+      out.push({ tool: "glob", pattern: parseActionsText(item[1] ?? ""), path: parseActionsText(item[2] ?? "") })
+    }
+    for (const item of txt.matchAll(/"tool"\s*:\s*"grep"\s*,\s*"pattern"\s*:\s*"([\s\S]*?)"(?:\s*,\s*"path"\s*:\s*"([\s\S]*?)")?\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
+      out.push({ tool: "grep", pattern: parseActionsText(item[1] ?? ""), path: parseActionsText(item[2] ?? "") })
+    }
+    for (const item of txt.matchAll(/"tool"\s*:\s*"webfetch"\s*,\s*"url"\s*:\s*"([\s\S]*?)"\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
+      out.push({ tool: "webfetch", url: parseActionsText(item[1] ?? "") })
+    }
+    for (const item of txt.matchAll(/"tool"\s*:\s*"todoread"\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
+      out.push({ tool: "todoread" })
+    }
+    for (const item of txt.matchAll(/"tool"\s*:\s*"invalid"\s*,\s*"message"\s*:\s*"([\s\S]*?)"\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
+      out.push({ tool: "invalid", message: parseActionsText(item[1] ?? "") })
     }
     return out
   }
