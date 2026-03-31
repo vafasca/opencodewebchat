@@ -157,8 +157,58 @@ const parse = (raw: string) => {
   return out
 }
 
+
+const pickNames = (tools?: unknown) => {
+  if (!tools || typeof tools !== "object") return new Set<string>()
+  if (Array.isArray(tools)) {
+    return new Set(
+      tools
+        .flatMap((item) => {
+          if (!item || typeof item !== "object") return [] as string[]
+          if (!("name" in item) || typeof item.name !== "string") return [] as string[]
+          return [item.name]
+        })
+        .filter(Boolean),
+    )
+  }
+  return new Set(Object.keys(tools as Record<string, unknown>))
+}
+
+const pickDesc = (input: Record<string, unknown>) => {
+  const cmd = typeof input.command === "string" ? input.command : ""
+  if (!cmd.trim()) return "Run shell command"
+  const head = cmd.split(/\s+/).slice(0, 8).join(" ").trim()
+  return head ? `Run: ${head}` : "Run shell command"
+}
+
+const normalizeCall = (call: { tool: string; input: Record<string, unknown> }, tools?: unknown) => {
+  const names = pickNames(tools)
+  const tool = call.tool === "shell" ? "bash" : call.tool
+  const input = { ...call.input }
+
+  if (tool === "bash") {
+    if (typeof input.command !== "string" && typeof input.cmd === "string") input.command = input.cmd
+    delete input.cmd
+    if (typeof input.description !== "string") input.description = pickDesc(input)
+  }
+
+  if (!names.size || names.has(tool) || tool === "invalid") {
+    return { tool, input }
+  }
+
+  return {
+    tool: "invalid",
+    input: {
+      tool,
+      available: Array.from(names),
+      payload: input,
+      message: `Model tried unavailable tool '${tool}'.`,
+    },
+  }
+}
+
 const pickCalls = (raw: string, tools?: unknown) => {
-  const list = parse(raw)
+  const list = parse(raw).map((item) => normalizeCall(item, tools))
   if (list.length) return list
   if (!hasTools(tools)) return list
   return [
