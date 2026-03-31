@@ -1098,6 +1098,11 @@ export namespace SessionPrompt {
     for (const item of txt.matchAll(/"tool"\s*:\s*"bash"\s*,\s*"cmd"\s*:\s*"([\s\S]*?)"\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
       out.push({ tool: "bash", cmd: parseActionsText(item[1] ?? "") })
     }
+    if (!out.some((item) => item.tool === "bash") && /"tool"\s*:\s*"bash"/.test(txt)) {
+      const item = txt.match(/"tool"\s*:\s*"bash"\s*,\s*"cmd"\s*:\s*"([\s\S]*)$/)
+      const cmd = parseActionsCmd(item?.[1] ?? "")
+      if (cmd) out.push({ tool: "bash", cmd })
+    }
     for (const item of txt.matchAll(/"tool"\s*:\s*"glob"\s*,\s*"pattern"\s*:\s*"([\s\S]*?)"(?:\s*,\s*"path"\s*:\s*"([\s\S]*?)")?\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
       out.push({ tool: "glob", pattern: parseActionsText(item[1] ?? ""), path: parseActionsText(item[2] ?? "") })
     }
@@ -1117,6 +1122,16 @@ export namespace SessionPrompt {
       out.push({ tool: "invalid", message: parseActionsText(item[1] ?? "") })
     }
     return out
+  }
+
+  const parseActionsCmd = (txt: string) => {
+    const body = parseActionsText(txt)
+      .replace(/```[\s\S]*$/g, "")
+      .replace(/\]\(\)\s*$/g, "")
+      .replace(/"\s*}\s*]\s*}\s*$/g, "")
+      .trim()
+    if (!body) return ""
+    return body
   }
 
   const parseActionsField = (txt: string, head: RegExp, tail: RegExp) => {
