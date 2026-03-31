@@ -245,6 +245,36 @@ export namespace SessionPrompt {
         settle: cfg.webchat?.settle,
         headless: cfg.webchat?.headless,
       })
+    const model =
+      input.message.info.role === "assistant"
+        ? input.message.info.mode
+        : await lastModel(input.input.sessionID).catch(() => input.message.info.model.modelID)
+    const assistant = (await Session.updateMessage({
+      id: MessageID.ascending(),
+      parentID: input.message.info.id,
+      role: "assistant",
+      mode: input.message.info.agent,
+      agent: input.message.info.agent,
+      variant: input.message.info.variant,
+      path: {
+        cwd: Instance.directory,
+        root: Instance.worktree,
+      },
+      cost: 0,
+      tokens: {
+        input: 0,
+        output: 0,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      },
+      modelID: (typeof model === "string" ? model : model.modelID) as any,
+      providerID: (typeof model === "string" ? model : model.providerID) as any,
+      time: {
+        created: Date.now(),
+      },
+      finish: "stop",
+      sessionID: input.input.sessionID,
+    })) as MessageV2.Assistant
     let raw = await run(txt).catch((err) => {
       const txt = err instanceof Error ? err.message : String(err)
       log.error("prompt.webchat.failed", {
@@ -265,7 +295,7 @@ export namespace SessionPrompt {
     })
     let now = raw
     for (let i = 0; i < max; i++) {
-      const item = await webchatExec(now, input.input.sessionID)
+      const item = await webchatExec(now, input.input.sessionID, assistant)
       if (!item.actions.length) break
       acts.push(...item.actions)
       if (!item.more) break
@@ -289,7 +319,7 @@ export namespace SessionPrompt {
       ).catch(() => "")
       if (retry.trim()) {
         raw = [raw, "", retry].join("\n")
-        const item = await webchatExec(retry, input.input.sessionID)
+        const item = await webchatExec(retry, input.input.sessionID, assistant)
         acts.push(...item.actions)
       }
     }
@@ -304,7 +334,7 @@ export namespace SessionPrompt {
       ).catch(() => "")
       if (retry.trim()) {
         raw = [raw, "", retry].join("\n")
-        const item = await webchatExec(retry, input.input.sessionID)
+        const item = await webchatExec(retry, input.input.sessionID, assistant)
         acts.push(...item.actions)
       }
     }
@@ -321,7 +351,7 @@ export namespace SessionPrompt {
       ).catch(() => "")
       if (retry.trim()) {
         raw = [raw, "", retry].join("\n")
-        const item = await webchatExec(retry, input.input.sessionID)
+        const item = await webchatExec(retry, input.input.sessionID, assistant)
         acts.push(...item.actions)
       }
     }
@@ -362,36 +392,6 @@ export namespace SessionPrompt {
           ...save.map((item) => `- ${item}`),
         ].join("\n")
       : raw
-    const model =
-      input.message.info.role === "assistant"
-        ? input.message.info.mode
-        : await lastModel(input.input.sessionID).catch(() => input.message.info.model.modelID)
-    const assistant = (await Session.updateMessage({
-      id: MessageID.ascending(),
-      parentID: input.message.info.id,
-      role: "assistant",
-      mode: input.message.info.agent,
-      agent: input.message.info.agent,
-      variant: input.message.info.variant,
-      path: {
-        cwd: Instance.directory,
-        root: Instance.worktree,
-      },
-      cost: 0,
-      tokens: {
-        input: 0,
-        output: 0,
-        reasoning: 0,
-        cache: { read: 0, write: 0 },
-      },
-      modelID: (typeof model === "string" ? model : model.modelID) as any,
-      providerID: (typeof model === "string" ? model : model.providerID) as any,
-      time: {
-        created: Date.now(),
-      },
-      finish: "stop",
-      sessionID: input.input.sessionID,
-    })) as MessageV2.Assistant
     await Session.updatePart({
       id: PartID.ascending(),
       messageID: assistant.id,
@@ -458,8 +458,9 @@ export namespace SessionPrompt {
       "  ...contenido...",
       "  ```",
       "- Si necesitas herramientas, devuelve SOLO un bloque ```opencode-actions con JSON válido.",
-      "- Herramientas soportadas: write, read, edit, bash, glob, grep, webfetch, todowrite, todoread, invalid.",
+      "- Herramientas soportadas: write, read, edit, bash, glob, grep, webfetch, todowrite, todoread, apply_patch, invalid.",
       '- Formato JSON: {"actions":[{"tool":"bash","cmd":"ls -la"}]}',
+      '- Formato apply_patch: {"actions":[{"tool":"apply_patch","patch":"*** Begin Patch\\n*** Update File: index.html\\n...\\n*** End Patch"}]}',
       "- Si el proyecto está vacío y piden un framework/app completa (Angular/React/Vue/etc), usa bash para scaffold real (ej: ng new, npm create) y luego aplica edit/write sobre ese scaffold.",
       "- No simules archivos creados: si no ejecutaste acciones reales, no afirmes que creaste archivos.",
       "- Espera el resultado de herramientas antes de dar la respuesta final.",
@@ -554,7 +555,7 @@ export namespace SessionPrompt {
       })
       .join("\n\n")
 
-  const webchatExec = async (txt: string, sessionID?: string) => {
+  const webchatExec = async (txt: string, sessionID?: string, assistant?: MessageV2.Assistant) => {
     const actions: string[] = []
     const results: string[] = []
     let more = false
@@ -568,6 +569,61 @@ export namespace SessionPrompt {
       )
     }
     for (const item of data) {
+      const start = Date.now()
+      const callID = ulid()
+      const partID = PartID.ascending()
+      const withTool = assistant && sessionID
+      if (withTool) {
+        await Session.updatePart({
+          id: partID,
+          messageID: assistant.id,
+          sessionID,
+          type: "tool",
+          callID,
+          tool: item.tool,
+          state: {
+            status: "running",
+            input: item as Record<string, unknown>,
+            time: { start },
+          },
+        })
+      }
+      const done = async (title: string, output: string) => {
+        if (!withTool) return
+        await Session.updatePart({
+          id: partID,
+          messageID: assistant.id,
+          sessionID,
+          type: "tool",
+          callID,
+          tool: item.tool,
+          state: {
+            status: "completed",
+            input: item as Record<string, unknown>,
+            output,
+            title,
+            metadata: {},
+            time: { start, end: Date.now() },
+          },
+        })
+      }
+      const fail = async (error: string) => {
+        if (!withTool) return
+        await Session.updatePart({
+          id: partID,
+          messageID: assistant.id,
+          sessionID,
+          type: "tool",
+          callID,
+          tool: item.tool,
+          state: {
+            status: "error",
+            input: item as Record<string, unknown>,
+            error,
+            time: { start, end: Date.now() },
+          },
+        })
+      }
       if (item.tool === "write") {
         const file = path.resolve(Instance.directory, item.file)
         if (!Filesystem.contains(Instance.directory, file)) continue
@@ -579,11 +635,13 @@ export namespace SessionPrompt {
         if (ok) {
           actions.push(`write ${rel}`)
           results.push(`tool: write\nfile: ${rel}\nstatus: ok`)
+          await done(`write: ${rel}`, "ok")
           continue
         }
         more = true
         actions.push(`write ${rel} (error)`)
         results.push(`tool: write\nfile: ${rel}\nstatus: error\nreason: no se pudo escribir archivo`)
+        await fail("no se pudo escribir archivo")
         continue
       }
       if (item.tool === "read") {
@@ -595,6 +653,7 @@ export namespace SessionPrompt {
         const rel = path.relative(Instance.directory, file) || path.basename(file)
         actions.push(`read ${rel} (${body.length} chars)`)
         results.push(`tool: read\nfile: ${rel}\nstatus: ok\noutput:\n${body}`)
+        await done(`read: ${rel}`, body)
         continue
       }
       if (item.tool === "edit") {
@@ -607,12 +666,14 @@ export namespace SessionPrompt {
           more = true
           actions.push(`edit ${item.file} (sin match oldString)`)
           results.push(`tool: edit\nfile: ${item.file}\nstatus: error\nreason: oldString no encontrado`)
+          await fail("oldString no encontrado")
           continue
         }
         await Filesystem.write(file, src.replace(item.oldString, item.newString))
         const rel = path.relative(Instance.directory, file) || path.basename(file)
         actions.push(`edit ${rel}`)
         results.push(`tool: edit\nfile: ${rel}\nstatus: ok`)
+        await done(`edit: ${rel}`, "ok")
         continue
       }
       if (item.tool === "bash") {
@@ -627,6 +688,7 @@ export namespace SessionPrompt {
         if (bad) {
           actions.push(`bash ${cmd || "(empty)"} (invalid)`)
           results.push(`tool: bash\ncmd: ${cmd || "(empty)"}\nstatus: error\nreason: comando bash incompleto o inválido`)
+          await fail("comando bash incompleto o inválido")
           continue
         }
         const call = process.platform === "win32" ? ["cmd", "/c", cmd] : ["bash", "-lc", cmd]
@@ -642,6 +704,24 @@ export namespace SessionPrompt {
             "\n",
           ),
         )
+        if (out.code !== 0) {
+          await fail(`exit ${out.code}`)
+          continue
+        }
+        await done(`bash: ${cmd}`, body || "(empty)")
+        continue
+      }
+      if (item.tool === "apply_patch") {
+        more = true
+        const result = await webchatApply(item.patch)
+        const output = [
+          ...result.done.map((f) => `ok: ${f}`),
+          ...result.skip.map((f) => `skip: ${f}`),
+        ].join("\n")
+        actions.push(`apply_patch (${result.done.length} aplicados, ${result.skip.length} omitidos)`)
+        results.push(`tool: apply_patch\nstatus: ok\noutput:\n${output || "(empty)"}`)
+        await done("apply_patch", output || "(empty)")
+        continue
       }
       if (item.tool === "glob") {
         const cwd = item.path ? path.resolve(Instance.directory, item.path) : Instance.directory
@@ -649,6 +729,7 @@ export namespace SessionPrompt {
         const list = Glob.scanSync(item.pattern, { cwd, dot: true })
         actions.push(`glob ${item.pattern} (${list.length})`)
         results.push(`tool: glob\npattern: ${item.pattern}\nstatus: ok\noutput:\n${list.join("\n") || "(empty)"}`)
+        await done(`glob: ${item.pattern}`, list.join("\n") || "(empty)")
         continue
       }
       if (item.tool === "grep") {
@@ -662,6 +743,7 @@ export namespace SessionPrompt {
         const body = [out.stdout.toString(), out.stderr.toString()].filter((item) => item.trim()).join("\n")
         actions.push(`grep ${item.pattern} (exit ${out.code})`)
         results.push(`tool: grep\npattern: ${item.pattern}\nstatus: ok\noutput:\n${body || "(empty)"}`)
+        await done(`grep: ${item.pattern}`, body || "(empty)")
         continue
       }
       if (item.tool === "webfetch") {
@@ -671,6 +753,7 @@ export namespace SessionPrompt {
           .catch((err) => `error: ${err instanceof Error ? err.message : String(err)}`)
         actions.push(`webfetch ${item.url}`)
         results.push(`tool: webfetch\nurl: ${item.url}\nstatus: ok\noutput:\n${body}`)
+        await done(`webfetch: ${item.url}`, body)
         continue
       }
       if (item.tool === "todowrite") {
@@ -682,6 +765,7 @@ export namespace SessionPrompt {
         }).catch(() => undefined)
         actions.push(`todowrite ${item.todos.length}`)
         results.push(`tool: todowrite\nstatus: ok`)
+        await done("todowrite", "ok")
         continue
       }
       if (item.tool === "todoread") {
@@ -690,12 +774,14 @@ export namespace SessionPrompt {
         const todos = await Todo.get(SessionID.construct(sessionID)).catch(() => [])
         actions.push(`todoread ${todos.length}`)
         results.push(`tool: todoread\nstatus: ok\noutput:\n${JSON.stringify(todos, null, 2)}`)
+        await done("todoread", JSON.stringify(todos, null, 2))
         continue
       }
       if (item.tool === "invalid") {
         more = true
         actions.push(`invalid`)
         results.push(`tool: invalid\nstatus: error\nreason: ${item.message}`)
+        await fail(item.message)
         continue
       }
     }
@@ -833,6 +919,7 @@ export namespace SessionPrompt {
             z.object({ tool: z.literal("glob"), pattern: z.string(), path: z.string().optional() }),
             z.object({ tool: z.literal("grep"), pattern: z.string(), path: z.string().optional() }),
             z.object({ tool: z.literal("webfetch"), url: z.string() }),
+            z.object({ tool: z.literal("apply_patch"), patch: z.string() }),
             z.object({
               tool: z.literal("todowrite"),
               todos: z.array(
@@ -861,7 +948,7 @@ export namespace SessionPrompt {
 
   const parseActionsLoose = (txt: string) => {
     const out: {
-      tool: "write" | "read" | "edit" | "bash" | "glob" | "grep" | "webfetch" | "todoread" | "invalid"
+      tool: "write" | "read" | "edit" | "bash" | "glob" | "grep" | "webfetch" | "apply_patch" | "todoread" | "invalid"
       file?: string
       content?: string
       oldString?: string
@@ -871,6 +958,7 @@ export namespace SessionPrompt {
       path?: string
       url?: string
       message?: string
+      patch?: string
     }[] = []
     for (const item of txt.matchAll(/"tool"\s*:\s*"edit"[\s\S]*?}(?=\s*,\s*{|\s*]\s*})/g)) {
       const row = item[0] ?? ""
@@ -913,6 +1001,9 @@ export namespace SessionPrompt {
     }
     for (const item of txt.matchAll(/"tool"\s*:\s*"webfetch"\s*,\s*"url"\s*:\s*"([\s\S]*?)"\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
       out.push({ tool: "webfetch", url: parseActionsText(item[1] ?? "") })
+    }
+    for (const item of txt.matchAll(/"tool"\s*:\s*"apply_patch"\s*,\s*"patch"\s*:\s*"([\s\S]*?)"\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
+      out.push({ tool: "apply_patch", patch: parseActionsText(item[1] ?? "") })
     }
     for (const item of txt.matchAll(/"tool"\s*:\s*"todoread"\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
       out.push({ tool: "todoread" })
