@@ -78,12 +78,16 @@ const protocol = () =>
     "",
     "TOOLS PROTOCOL (MANDATORY):",
     "- If the task needs actions in filesystem/terminal, respond ONLY with a single ```opencode-actions block.",
-    "- The block MUST be valid JSON with shape: {\"actions\":[...]}.",
+    "- The block MUST be valid JSON with shape: {\"actions\":[...]}",
+    "- Return EXACTLY ONE action per assistant response (actions length must be 1).",
+    "- Wait for TOOL_RESULT before deciding the next action.",
+    "- Prefer reactive flow: inspect -> execute -> inspect result -> next action.",
+    "- Before patching files, prefer read/edit flow to avoid stale context.",
     "- Use native tools: bash, write, edit, read, glob, grep, apply_patch, webfetch, todowrite, todoread.",
     "- Do not include explanations outside the block when using tools.",
     "- Example:",
     "```opencode-actions",
-    '{"actions":[{"tool":"bash","cmd":"npm create ..."},{"tool":"write","file":"src/app/app.component.ts","content":"..."}]}',
+    '{"actions":[{"tool":"bash","cmd":"npm create ..."}]}',
     "```",
   ].join("\n")
 
