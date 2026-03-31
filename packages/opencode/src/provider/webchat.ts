@@ -131,16 +131,15 @@ const pickObjects = (txt: string) => {
 const parse = (raw: string) => {
   const groups = [
     ...[...raw.matchAll(/```opencode-actions\s*\n([\s\S]*?)```/gi)].map((item) => item[1] ?? ""),
-    ...[...raw.matchAll(/opencode-actions\s*\n([\s\S]*?)(?=(?:\nopencode-actions\s*\n)|$)/gi)].map(
-      (item) => item[1] ?? "",
-    ),
+    ...[...raw.matchAll(/opencode-actions\s*([\s\S]*?)(?=(?:opencode-actions\s*)|$)/gi)].map((item) => item[1] ?? ""),
     raw,
   ]
   const out: { tool: string; input: Record<string, unknown> }[] = []
-  for (const item of groups.flatMap((item) => pickObjects(item))) {
+
+  const push = (txt: string) => {
     try {
-      const data = JSON.parse(item)
-      if (!data || typeof data !== "object" || !("actions" in data) || !Array.isArray(data.actions)) continue
+      const data = JSON.parse(txt)
+      if (!data || typeof data !== "object" || !("actions" in data) || !Array.isArray(data.actions)) return false
       for (const row of data.actions) {
         if (!row || typeof row !== "object" || !("tool" in row) || typeof row.tool !== "string") continue
         const input: Record<string, unknown> = {}
@@ -150,12 +149,29 @@ const parse = (raw: string) => {
         }
         out.push({ tool: row.tool, input })
       }
+      return true
     } catch {
-      continue
+      return false
     }
   }
+
+  for (const item of groups) {
+    const txt = item.trim()
+    if (!txt) continue
+    if (push(txt)) continue
+
+    const first = txt.indexOf("{")
+    const last = txt.lastIndexOf("}")
+    if (first >= 0 && last > first && push(txt.slice(first, last + 1))) continue
+
+    for (const chunk of pickObjects(txt)) {
+      push(chunk)
+    }
+  }
+
   return out
 }
+
 
 
 const pickNames = (tools?: unknown) => {
