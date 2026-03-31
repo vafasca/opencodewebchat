@@ -323,10 +323,12 @@ export namespace SessionPrompt {
     if (onlybash) {
       const retry = await run(
         [
-          "Scaffold detectado.",
-          "Ahora aplica la implementación solicitada con acciones reales edit/write sobre el proyecto creado.",
-          "Devuelve SOLO opencode-actions JSON.",
-          "No respondas con explicación.",
+          "Tu respuesta anterior fue truncada — el bloque opencode-actions se cortó antes de completar los edits.",
+          "Los bash ya se ejecutaron exitosamente. NO los repitas.",
+          "Devuelve SOLO un nuevo bloque ```opencode-actions con las acciones edit/write pendientes.",
+          "Para archivos con más de 30 líneas de contenido usa 'write' en lugar de 'edit'.",
+          '- Formato write: {"actions":[{"tool":"write","file":"hotel-landing/src/app/app.html","content":"...contenido completo..."}]}',
+          "No incluyas explicación ni texto fuera del bloque JSON.",
         ].join("\n"),
       ).catch(() => "")
       if (retry.trim()) {
@@ -464,6 +466,9 @@ export namespace SessionPrompt {
       "- Para editar archivos existentes: usa SIEMPRE ```opencode-actions con tool edit.",
       "- NO uses diffs artifact ni diff unificado.",
       '- Formato edit: {"actions":[{"tool":"edit","file":"index.html","oldString":"...","newString":"..."}]}',
+      "- Para contenido HTML/CSS/TS con más de 30 líneas: usa 'write' (contenido completo) en lugar de 'edit' (oldString/newString).",
+      "- Razón: 'edit' con newString muy largo puede truncarse en el canal de comunicación.",
+      '- Formato write: {"actions":[{"tool":"write","file":"src/app/app.html","content":"<!DOCTYPE html>..."}]}',
       "- Si hay múltiples archivos involucrados (por ejemplo html/css/js), incluye todas las acciones edit necesarias en el mismo bloque.",
       "- No reescribas el archivo completo si ya existe.",
       "- Para archivos nuevos: usa formato por archivo:",
