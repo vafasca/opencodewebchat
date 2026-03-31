@@ -89,15 +89,57 @@ const format = (
   return `${body}\n\n${protocol()}`
 }
 
+const pickObjects = (txt: string) => {
+  const out: string[] = []
+  let depth = 0
+  let from = -1
+  let str = false
+  let esc = false
+  for (let i = 0; i < txt.length; i++) {
+    const ch = txt[i]
+    if (str) {
+      if (esc) {
+        esc = false
+        continue
+      }
+      if (ch === "\\") {
+        esc = true
+        continue
+      }
+      if (ch === '"') str = false
+      continue
+    }
+    if (ch === '"') {
+      str = true
+      continue
+    }
+    if (ch === "{") {
+      if (depth === 0) from = i
+      depth += 1
+      continue
+    }
+    if (ch !== "}") continue
+    if (depth === 0) continue
+    depth -= 1
+    if (depth !== 0 || from < 0) continue
+    out.push(txt.slice(from, i + 1))
+    from = -1
+  }
+  return out
+}
+
 const parse = (raw: string) => {
-  const body = [...raw.matchAll(/```opencode-actions\s*\n([\s\S]*?)```/gi)].map((item) => item[1] ?? "")
-  const list = body.length ? body : [raw]
+  const groups = [
+    ...[...raw.matchAll(/```opencode-actions\s*\n([\s\S]*?)```/gi)].map((item) => item[1] ?? ""),
+    ...[...raw.matchAll(/opencode-actions\s*\n([\s\S]*?)(?=(?:\nopencode-actions\s*\n)|$)/gi)].map(
+      (item) => item[1] ?? "",
+    ),
+    raw,
+  ]
   const out: { tool: string; input: Record<string, unknown> }[] = []
-  for (const item of list) {
-    const txt = item.trim()
-    if (!txt) continue
+  for (const item of groups.flatMap((item) => pickObjects(item))) {
     try {
-      const data = JSON.parse(txt)
+      const data = JSON.parse(item)
       if (!data || typeof data !== "object" || !("actions" in data) || !Array.isArray(data.actions)) continue
       for (const row of data.actions) {
         if (!row || typeof row !== "object" || !("tool" in row) || typeof row.tool !== "string") continue
@@ -114,6 +156,19 @@ const parse = (raw: string) => {
   }
   return out
 }
+
+const pickCalls = (raw: string, tools?: unknown) => {
+  const list = parse(raw)
+  if (list.length) return list
+  if (!hasTools(tools)) return list
+  return [
+    {
+      tool: "invalid",
+      input: { message: raw.trim() || "No actionable tool block found in webchat response" },
+    },
+  ]
+}
+
 
 
 const pickModel = (id: string, cfg: Awaited<ReturnType<typeof Config.get>>) => {
@@ -167,7 +222,7 @@ export class WebchatLanguageModel implements LanguageModelV2 {
       headless: cfg.webchat?.headless,
       sessionID: pickSession(options.headers),
     })
-    const calls = parse(raw)
+    const calls = pickCalls(raw, options.tools)
     const content: LanguageModelV2Content[] = calls.length
       ? calls.map((item) => ({
           type: "tool-call",
@@ -210,7 +265,7 @@ export class WebchatLanguageModel implements LanguageModelV2 {
       headless: cfg.webchat?.headless,
       sessionID: pickSession(options.headers),
     })
-    const calls = parse(raw)
+    const calls = pickCalls(raw, options.tools)
     const finishReason: LanguageModelV2FinishReason = calls.length ? "tool-calls" : "stop"
     const providerMetadata: SharedV2ProviderMetadata = { webchat: { calls: calls.length } }
 
