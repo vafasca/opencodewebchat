@@ -86,6 +86,23 @@ const parse = (raw: string) => {
   return out
 }
 
+
+const pickModel = (id: string, cfg: Awaited<ReturnType<typeof Config.get>>) => {
+  const part = id.replace(/^webchat-?/, "").split("-").filter(Boolean)
+  const target = (part.find((item) => item === "chatgpt" || item === "claude") ?? cfg.webchat?.target ?? "chatgpt") as
+    | "chatgpt"
+    | "claude"
+  const browser = (part.find((item) => item === "chrome" || item === "edge") ?? cfg.webchat?.browser ?? "chrome") as
+    | "chrome"
+    | "edge"
+  return { target, browser }
+}
+
+const pickSession = (headers?: Record<string, string | undefined>) => {
+  if (!headers) return undefined
+  return headers["x-opencode-session"] ?? headers["X-Opencode-Session"] ?? headers["x-opencode-session-id"]
+}
+
 const usage = {
   inputTokens: undefined,
   outputTokens: undefined,
@@ -108,16 +125,18 @@ export class WebchatLanguageModel implements LanguageModelV2 {
   ): Promise<Awaited<ReturnType<LanguageModelV2["doGenerate"]>>> {
     const cfg = await Config.get()
     const prompt = format(options.prompt, options.system)
+    const model = pickModel(this.modelId, cfg)
     const raw = await Webchat.run({
       prompt,
-      browser: cfg.webchat?.browser ?? "chrome",
-      target: cfg.webchat?.target ?? "chatgpt",
+      browser: model.browser,
+      target: model.target,
       url: cfg.webchat?.url,
       timeout: cfg.webchat?.timeout,
       input: cfg.webchat?.input_selector,
       response: cfg.webchat?.response_selector,
       settle: cfg.webchat?.settle,
       headless: cfg.webchat?.headless,
+      sessionID: pickSession(options.headers),
     })
     const calls = parse(raw)
     const content: LanguageModelV2Content[] = calls.length
@@ -149,16 +168,18 @@ export class WebchatLanguageModel implements LanguageModelV2 {
   ): Promise<Awaited<ReturnType<LanguageModelV2["doStream"]>>> {
     const cfg = await Config.get()
     const prompt = format(options.prompt, options.system)
+    const model = pickModel(this.modelId, cfg)
     const raw = await Webchat.run({
       prompt,
-      browser: cfg.webchat?.browser ?? "chrome",
-      target: cfg.webchat?.target ?? "chatgpt",
+      browser: model.browser,
+      target: model.target,
       url: cfg.webchat?.url,
       timeout: cfg.webchat?.timeout,
       input: cfg.webchat?.input_selector,
       response: cfg.webchat?.response_selector,
       settle: cfg.webchat?.settle,
       headless: cfg.webchat?.headless,
+      sessionID: pickSession(options.headers),
     })
     const calls = parse(raw)
     const finishReason: LanguageModelV2FinishReason = calls.length ? "tool-calls" : "stop"

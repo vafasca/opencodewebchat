@@ -2084,7 +2084,7 @@ export namespace SessionPrompt {
       input.webchat?.enabled === true
         ? {
             providerID: ProviderID.opencode,
-            modelID: ModelID.make(`webchat-${input.webchat.target ?? "chatgpt"}`),
+            modelID: ModelID.make(`webchat-${input.webchat.target ?? "chatgpt"}-${input.webchat.browser ?? "chrome"}`),
           }
         : input.model ?? agent.model ?? (await lastModel(input.sessionID))
     const full =
