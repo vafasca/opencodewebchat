@@ -25,6 +25,23 @@ const pickFile = (part: unknown) => {
   return type ? `[file:${name}:${type}]` : `[file:${name}]`
 }
 
+
+const pickTool = (part: unknown) => {
+  if (!part || typeof part !== "object") return ""
+  if (!("type" in part) || typeof part.type !== "string") return ""
+  if (part.type === "tool-call") {
+    const name = "toolName" in part && typeof part.toolName === "string" ? part.toolName : "unknown"
+    const input = "input" in part ? (typeof part.input === "string" ? part.input : JSON.stringify(part.input ?? {})) : "{}"
+    return `TOOL_CALL ${name} ${input}`
+  }
+  if (part.type === "tool-result") {
+    const name = "toolName" in part && typeof part.toolName === "string" ? part.toolName : "unknown"
+    const result = "output" in part ? (typeof part.output === "string" ? part.output : JSON.stringify(part.output ?? {})) : "{}"
+    return `TOOL_RESULT ${name} ${result}`
+  }
+  return ""
+}
+
 const normRole = (role: unknown) => {
   if (role === "system") return "System"
   if (role === "assistant") return "Assistant"
@@ -34,7 +51,7 @@ const normRole = (role: unknown) => {
 
 const pick = (msg: Parameters<LanguageModelV2["doGenerate"]>[0]["prompt"][number]) => {
   if (Array.isArray(msg.content)) {
-    return msg.content.map((part) => pickText(part) || pickFile(part)).filter(Boolean)
+    return msg.content.map((part) => pickText(part) || pickFile(part) || pickTool(part)).filter(Boolean)
   }
   if (typeof msg.content === "string") {
     const txt = msg.content.trim()
