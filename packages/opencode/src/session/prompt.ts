@@ -295,7 +295,7 @@ export namespace SessionPrompt {
     })
     let now = raw
     for (let i = 0; i < max; i++) {
-      const item = await webchatExec(now, input.input.sessionID, assistant)
+      const item = await webchatExec(now, input.input.sessionID, assistant, cfg.webchat?.timeout ?? 120_000)
       if (!item.actions.length) break
       acts.push(...item.actions)
       if (!item.more) break
@@ -319,7 +319,7 @@ export namespace SessionPrompt {
       ).catch(() => "")
       if (retry.trim()) {
         raw = [raw, "", retry].join("\n")
-        const item = await webchatExec(retry, input.input.sessionID, assistant)
+        const item = await webchatExec(retry, input.input.sessionID, assistant, cfg.webchat?.timeout ?? 120_000)
         acts.push(...item.actions)
       }
     }
@@ -334,7 +334,7 @@ export namespace SessionPrompt {
       ).catch(() => "")
       if (retry.trim()) {
         raw = [raw, "", retry].join("\n")
-        const item = await webchatExec(retry, input.input.sessionID, assistant)
+        const item = await webchatExec(retry, input.input.sessionID, assistant, cfg.webchat?.timeout ?? 120_000)
         acts.push(...item.actions)
       }
     }
@@ -351,7 +351,7 @@ export namespace SessionPrompt {
       ).catch(() => "")
       if (retry.trim()) {
         raw = [raw, "", retry].join("\n")
-        const item = await webchatExec(retry, input.input.sessionID, assistant)
+        const item = await webchatExec(retry, input.input.sessionID, assistant, cfg.webchat?.timeout ?? 120_000)
         acts.push(...item.actions)
       }
     }
@@ -437,7 +437,7 @@ export namespace SessionPrompt {
       "- Mantén el mismo estilo de ejecución de ingeniería (acciones concretas, rutas exactas).",
       "",
       "Archivos actuales en disco (fuente de verdad para editar):",
-      ...(await webchatContext()),
+      ...(await webchatContext(ask)),
       "",
       "Solicitud del usuario:",
       ask,
@@ -470,7 +470,7 @@ export namespace SessionPrompt {
       .trim()
   }
 
-  const webchatContext = async () => {
+  const webchatContext = async (ask = "") => {
     const ok = /\.(html|css|js|jsx|ts|tsx|json|md)$/i
     const skip = /(node_modules|\.git|dist|build|\.next|coverage)/
     const walk = async (dir: string, dep = 0): Promise<string[]> => {
@@ -488,14 +488,20 @@ export namespace SessionPrompt {
       return list.flat()
     }
     const all = await walk(Instance.directory)
+    const hit = ask.toLowerCase()
     const file = all
       .sort((a, b) => {
+        const ax = a.toLowerCase()
+        const bx = b.toLowerCase()
+        const aAsk = hit && (hit.includes(path.basename(ax)) || hit.includes(ax.replace(/\\/g, "/"))) ? -1 : 0
+        const bAsk = hit && (hit.includes(path.basename(bx)) || hit.includes(bx.replace(/\\/g, "/"))) ? -1 : 0
+        if (aAsk !== bAsk) return aAsk - bAsk
         const x = /[/\\](src|app)[/\\]/.test(a) ? 0 : 1
         const y = /[/\\](src|app)[/\\]/.test(b) ? 0 : 1
         if (x !== y) return x - y
         return a.localeCompare(b)
       })
-      .slice(0, 12)
+      .slice(0, 20)
     const out = await Promise.all(
       file.map(async (item) => {
         const body = await Filesystem.readText(item).catch(() => "")
@@ -575,7 +581,7 @@ export namespace SessionPrompt {
       })
       .join("\n\n")
 
-  const webchatExec = async (txt: string, sessionID?: string, assistant?: MessageV2.Assistant) => {
+  const webchatExec = async (txt: string, sessionID?: string, assistant?: MessageV2.Assistant, timeout = 120_000) => {
     const actions: string[] = []
     const results: string[] = []
     let more = false
@@ -712,20 +718,69 @@ export namespace SessionPrompt {
           continue
         }
         const call = process.platform === "win32" ? ["cmd", "/c", cmd] : ["bash", "-lc", cmd]
-        const out = await Process.run(call, {
+        const proc = Process.spawn(call, {
           cwd: Instance.directory,
-          timeout: 30_000,
-          nothrow: true,
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout,
         })
-        const body = [out.stdout.toString(), out.stderr.toString()].filter((item) => item.trim()).join("\n")
-        actions.push(`bash ${cmd} (exit ${out.code})`)
+        let out = ""
+        let err = ""
+        let ping = 0
+        proc.stdout?.on("data", async (row) => {
+          out += row.toString()
+          if (!withTool) return
+          const now = Date.now()
+          if (now - ping < 400) return
+          ping = now
+          await Session.updatePart({
+            id: partID,
+            messageID: assistant.id,
+            sessionID: SessionID.construct(sessionID),
+            type: "tool",
+            callID,
+            tool: item.tool,
+            state: {
+              status: "running",
+              input: item as Record<string, unknown>,
+              title: `bash: ${cmd}`,
+              metadata: { output: `${out}${err}`.slice(-8000) },
+              time: { start },
+            },
+          }).catch(() => undefined)
+        })
+        proc.stderr?.on("data", async (row) => {
+          err += row.toString()
+          if (!withTool) return
+          const now = Date.now()
+          if (now - ping < 400) return
+          ping = now
+          await Session.updatePart({
+            id: partID,
+            messageID: assistant.id,
+            sessionID: SessionID.construct(sessionID),
+            type: "tool",
+            callID,
+            tool: item.tool,
+            state: {
+              status: "running",
+              input: item as Record<string, unknown>,
+              title: `bash: ${cmd}`,
+              metadata: { output: `${out}${err}`.slice(-8000) },
+              time: { start },
+            },
+          }).catch(() => undefined)
+        })
+        const code = await proc.exited.catch(() => 1)
+        const body = [out, err].filter((item) => item.trim()).join("\n")
+        actions.push(`bash ${cmd} (exit ${code})`)
         results.push(
-          ["tool: bash", `cmd: ${cmd}`, `exit: ${out.code}`, "status: ok", `output:\n${body || "(empty)"}`].join(
+          ["tool: bash", `cmd: ${cmd}`, `exit: ${code}`, "status: ok", `output:\n${body || "(empty)"}`].join(
             "\n",
           ),
         )
-        if (out.code !== 0) {
-          await fail(`exit ${out.code}`)
+        if (code !== 0) {
+          await fail(`exit ${code}`)
           continue
         }
         await done(`bash: ${cmd}`, body || "(empty)")
