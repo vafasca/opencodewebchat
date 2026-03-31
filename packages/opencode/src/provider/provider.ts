@@ -56,8 +56,8 @@ import { WebchatLanguageModel } from "./webchat"
 
 export namespace Provider {
   const log = Log.create({ service: "provider" })
-  const reqf = path.join(Global.Path.log, "model-request.jsonl")
-  const resf = path.join(Global.Path.log, "model-response.jsonl")
+  const reqf = path.join(process.cwd(), "model-request.jsonl")
+  const resf = path.join(process.cwd(), "model-response.jsonl")
 
   function stringify(input: unknown) {
     if (typeof input === "string") return input
@@ -73,7 +73,6 @@ export namespace Provider {
   }
 
   async function write(file: string, item: Record<string, unknown>) {
-    if (!Flag.OPENCODE_DEBUG_MODEL_IO) return
     await mkdir(path.dirname(file), { recursive: true }).catch(() => undefined)
     await appendFile(file, `${JSON.stringify(item)}\n`).catch(() => undefined)
   }
