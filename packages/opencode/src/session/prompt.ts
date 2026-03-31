@@ -245,10 +245,7 @@ export namespace SessionPrompt {
         settle: cfg.webchat?.settle,
         headless: cfg.webchat?.headless,
       })
-    const model =
-      input.message.info.role === "assistant"
-        ? input.message.info.mode
-        : await lastModel(input.input.sessionID).catch(() => input.message.info.model.modelID)
+    const model = await lastModel(input.input.sessionID)
     const assistant = (await Session.updateMessage({
       id: MessageID.ascending(),
       parentID: input.message.info.id,
@@ -267,8 +264,8 @@ export namespace SessionPrompt {
         reasoning: 0,
         cache: { read: 0, write: 0 },
       },
-      modelID: (typeof model === "string" ? model : model.modelID) as any,
-      providerID: (typeof model === "string" ? model : model.providerID) as any,
+      modelID: model.modelID as any,
+      providerID: model.providerID as any,
       time: {
         created: Date.now(),
       },
@@ -326,10 +323,12 @@ export namespace SessionPrompt {
     if (onlybash) {
       const retry = await run(
         [
-          "Scaffold detectado.",
-          "Ahora aplica la implementación solicitada con acciones reales edit/write sobre el proyecto creado.",
-          "Devuelve SOLO opencode-actions JSON.",
-          "No respondas con explicación.",
+          "Tu respuesta anterior fue truncada — el bloque opencode-actions se cortó antes de completar los edits.",
+          "Los bash ya se ejecutaron exitosamente. NO los repitas.",
+          "Devuelve SOLO un nuevo bloque ```opencode-actions con las acciones edit/write pendientes.",
+          "Para archivos con más de 30 líneas de contenido usa 'write' en lugar de 'edit'.",
+          '- Formato write: {"actions":[{"tool":"write","file":"hotel-landing/src/app/app.html","content":"...contenido completo..."}]}',
+          "No incluyas explicación ni texto fuera del bloque JSON.",
         ].join("\n"),
       ).catch(() => "")
       if (retry.trim()) {
@@ -347,6 +346,22 @@ export namespace SessionPrompt {
           '1) Bloque ```opencode-actions con write/edit (JSON válido).',
           "2) Archivos nuevos en formato Ruta + bloque de código completo por archivo.",
           "No incluyas descripción ni texto de marketing.",
+        ].join("\n"),
+      ).catch(() => "")
+      if (retry.trim()) {
+        raw = [raw, "", retry].join("\n")
+        const item = await webchatExec(retry, input.input.sessionID, assistant, cfg.webchat?.timeout ?? 120_000)
+        acts.push(...item.actions)
+      }
+    }
+    if (app && !acts.length) {
+      const retry = await run(
+        [
+          "Debes ejecutar acciones reales ahora.",
+          "No respondas con explicación, bloqueo, ni preguntas.",
+          "Devuelve SOLO un bloque ```opencode-actions con JSON válido.",
+          "Si detectas npm E401/registry privado, primero corrige registry con bash y luego ejecuta scaffold.",
+          "Para Angular en proyecto vacío: usa bash con ng/npx y luego edit/write sobre src/.",
         ].join("\n"),
       ).catch(() => "")
       if (retry.trim()) {
@@ -411,7 +426,8 @@ export namespace SessionPrompt {
   }
 
   const webchatPrompt = async (input: { input: PromptInput; message: MessageV2.WithParts }) => {
-    const model = await Provider.getModel(input.message.info.model.providerID, input.message.info.model.modelID)
+    const pick = await lastModel(input.input.sessionID)
+    const model = await Provider.getModel(pick.providerID, pick.modelID)
     const msgs = await MessageV2.filterCompacted(MessageV2.stream(input.input.sessionID))
     const list = MessageV2.toModelMessages(msgs, model, { stripMedia: true })
     const user = list
@@ -450,6 +466,9 @@ export namespace SessionPrompt {
       "- Para editar archivos existentes: usa SIEMPRE ```opencode-actions con tool edit.",
       "- NO uses diffs artifact ni diff unificado.",
       '- Formato edit: {"actions":[{"tool":"edit","file":"index.html","oldString":"...","newString":"..."}]}',
+      "- Para contenido HTML/CSS/TS con más de 30 líneas: usa 'write' (contenido completo) en lugar de 'edit' (oldString/newString).",
+      "- Razón: 'edit' con newString muy largo puede truncarse en el canal de comunicación.",
+      '- Formato write: {"actions":[{"tool":"write","file":"src/app/app.html","content":"<!DOCTYPE html>..."}]}',
       "- Si hay múltiples archivos involucrados (por ejemplo html/css/js), incluye todas las acciones edit necesarias en el mismo bloque.",
       "- No reescribas el archivo completo si ya existe.",
       "- Para archivos nuevos: usa formato por archivo:",
@@ -585,6 +604,7 @@ export namespace SessionPrompt {
     const actions: string[] = []
     const results: string[] = []
     let more = false
+    const seen = new Set<string>()
     const data = [...txt.matchAll(/```opencode-actions\s*\n([\s\S]*?)```/gi)]
       .flatMap((item) => parseActions(item[1] ?? ""))
       .flatMap((item) => item.actions)
@@ -595,6 +615,9 @@ export namespace SessionPrompt {
       )
     }
     for (const item of data) {
+      const hash = JSON.stringify(item)
+      if (seen.has(hash)) continue
+      seen.add(hash)
       const start = Date.now()
       const callID = ulid()
       const partID = PartID.ascending()
@@ -603,7 +626,7 @@ export namespace SessionPrompt {
         await Session.updatePart({
           id: partID,
           messageID: assistant.id,
-          sessionID: SessionID.construct(sessionID),
+          sessionID: SessionID.make(sessionID),
           type: "tool",
           callID,
           tool: item.tool,
@@ -619,7 +642,7 @@ export namespace SessionPrompt {
         await Session.updatePart({
           id: partID,
           messageID: assistant.id,
-          sessionID: SessionID.construct(sessionID),
+          sessionID: SessionID.make(sessionID),
           type: "tool",
           callID,
           tool: item.tool,
@@ -638,7 +661,7 @@ export namespace SessionPrompt {
         await Session.updatePart({
           id: partID,
           messageID: assistant.id,
-          sessionID: SessionID.construct(sessionID),
+          sessionID: SessionID.make(sessionID),
           type: "tool",
           callID,
           tool: item.tool,
@@ -722,7 +745,7 @@ export namespace SessionPrompt {
           cwd: Instance.directory,
           stdout: "pipe",
           stderr: "pipe",
-          timeout,
+          timeout: Math.max(timeout, 600_000),
         })
         let out = ""
         let err = ""
@@ -736,7 +759,7 @@ export namespace SessionPrompt {
           await Session.updatePart({
             id: partID,
             messageID: assistant.id,
-            sessionID: SessionID.construct(sessionID),
+            sessionID: SessionID.make(sessionID),
             type: "tool",
             callID,
             tool: item.tool,
@@ -758,7 +781,7 @@ export namespace SessionPrompt {
           await Session.updatePart({
             id: partID,
             messageID: assistant.id,
-            sessionID: SessionID.construct(sessionID),
+            sessionID: SessionID.make(sessionID),
             type: "tool",
             callID,
             tool: item.tool,
@@ -864,10 +887,14 @@ export namespace SessionPrompt {
       if (item.tool === "todowrite") {
         more = true
         if (!sessionID) continue
-        await Todo.update({
-          sessionID: SessionID.construct(sessionID),
-          todos: item.todos,
-        }).catch(() => undefined)
+        Todo.update({
+          sessionID: SessionID.make(sessionID),
+          todos: item.todos.map((todo) => ({
+            content: todo.content,
+            status: todo.status,
+            priority: todo.priority ?? "medium",
+          })),
+        })
         actions.push(`todowrite ${item.todos.length}`)
         results.push(`tool: todowrite\nstatus: ok`)
         await done("todowrite", "ok")
@@ -876,7 +903,7 @@ export namespace SessionPrompt {
       if (item.tool === "todoread") {
         more = true
         if (!sessionID) continue
-        const todos = await Todo.get(SessionID.construct(sessionID)).catch(() => [])
+        const todos = Todo.get(SessionID.make(sessionID))
         actions.push(`todoread ${todos.length}`)
         results.push(`tool: todoread\nstatus: ok\noutput:\n${JSON.stringify(todos, null, 2)}`)
         await done("todoread", JSON.stringify(todos, null, 2))
@@ -1098,6 +1125,11 @@ export namespace SessionPrompt {
     for (const item of txt.matchAll(/"tool"\s*:\s*"bash"\s*,\s*"cmd"\s*:\s*"([\s\S]*?)"\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
       out.push({ tool: "bash", cmd: parseActionsText(item[1] ?? "") })
     }
+    if (!out.some((item) => item.tool === "bash") && /"tool"\s*:\s*"bash"/.test(txt)) {
+      const item = txt.match(/"tool"\s*:\s*"bash"\s*,\s*"cmd"\s*:\s*"([\s\S]*)$/)
+      const cmd = parseActionsCmd(item?.[1] ?? "")
+      if (cmd) out.push({ tool: "bash", cmd })
+    }
     for (const item of txt.matchAll(/"tool"\s*:\s*"glob"\s*,\s*"pattern"\s*:\s*"([\s\S]*?)"(?:\s*,\s*"path"\s*:\s*"([\s\S]*?)")?\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
       out.push({ tool: "glob", pattern: parseActionsText(item[1] ?? ""), path: parseActionsText(item[2] ?? "") })
     }
@@ -1117,6 +1149,16 @@ export namespace SessionPrompt {
       out.push({ tool: "invalid", message: parseActionsText(item[1] ?? "") })
     }
     return out
+  }
+
+  const parseActionsCmd = (txt: string) => {
+    const body = parseActionsText(txt)
+      .replace(/```[\s\S]*$/g, "")
+      .replace(/\]\(\)\s*$/g, "")
+      .replace(/"\s*}\s*]\s*}\s*$/g, "")
+      .trim()
+    if (!body) return ""
+    return body
   }
 
   const parseActionsField = (txt: string, head: RegExp, tail: RegExp) => {
