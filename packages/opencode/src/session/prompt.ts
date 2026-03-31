@@ -245,10 +245,7 @@ export namespace SessionPrompt {
         settle: cfg.webchat?.settle,
         headless: cfg.webchat?.headless,
       })
-    const model =
-      input.message.info.role === "assistant"
-        ? input.message.info.mode
-        : await lastModel(input.input.sessionID).catch(() => input.message.info.model.modelID)
+    const model = await lastModel(input.input.sessionID)
     const assistant = (await Session.updateMessage({
       id: MessageID.ascending(),
       parentID: input.message.info.id,
@@ -267,8 +264,8 @@ export namespace SessionPrompt {
         reasoning: 0,
         cache: { read: 0, write: 0 },
       },
-      modelID: (typeof model === "string" ? model : model.modelID) as any,
-      providerID: (typeof model === "string" ? model : model.providerID) as any,
+      modelID: model.modelID as any,
+      providerID: model.providerID as any,
       time: {
         created: Date.now(),
       },
@@ -411,7 +408,8 @@ export namespace SessionPrompt {
   }
 
   const webchatPrompt = async (input: { input: PromptInput; message: MessageV2.WithParts }) => {
-    const model = await Provider.getModel(input.message.info.model.providerID, input.message.info.model.modelID)
+    const pick = await lastModel(input.input.sessionID)
+    const model = await Provider.getModel(pick.providerID, pick.modelID)
     const msgs = await MessageV2.filterCompacted(MessageV2.stream(input.input.sessionID))
     const list = MessageV2.toModelMessages(msgs, model, { stripMedia: true })
     const user = list
@@ -607,7 +605,7 @@ export namespace SessionPrompt {
         await Session.updatePart({
           id: partID,
           messageID: assistant.id,
-          sessionID: SessionID.construct(sessionID),
+          sessionID: SessionID.make(sessionID),
           type: "tool",
           callID,
           tool: item.tool,
@@ -623,7 +621,7 @@ export namespace SessionPrompt {
         await Session.updatePart({
           id: partID,
           messageID: assistant.id,
-          sessionID: SessionID.construct(sessionID),
+          sessionID: SessionID.make(sessionID),
           type: "tool",
           callID,
           tool: item.tool,
@@ -642,7 +640,7 @@ export namespace SessionPrompt {
         await Session.updatePart({
           id: partID,
           messageID: assistant.id,
-          sessionID: SessionID.construct(sessionID),
+          sessionID: SessionID.make(sessionID),
           type: "tool",
           callID,
           tool: item.tool,
@@ -740,7 +738,7 @@ export namespace SessionPrompt {
           await Session.updatePart({
             id: partID,
             messageID: assistant.id,
-            sessionID: SessionID.construct(sessionID),
+            sessionID: SessionID.make(sessionID),
             type: "tool",
             callID,
             tool: item.tool,
@@ -762,7 +760,7 @@ export namespace SessionPrompt {
           await Session.updatePart({
             id: partID,
             messageID: assistant.id,
-            sessionID: SessionID.construct(sessionID),
+            sessionID: SessionID.make(sessionID),
             type: "tool",
             callID,
             tool: item.tool,
@@ -869,7 +867,7 @@ export namespace SessionPrompt {
         more = true
         if (!sessionID) continue
         await Todo.update({
-          sessionID: SessionID.construct(sessionID),
+          sessionID: SessionID.make(sessionID),
           todos: item.todos,
         }).catch(() => undefined)
         actions.push(`todowrite ${item.todos.length}`)
@@ -880,7 +878,7 @@ export namespace SessionPrompt {
       if (item.tool === "todoread") {
         more = true
         if (!sessionID) continue
-        const todos = await Todo.get(SessionID.construct(sessionID)).catch(() => [])
+        const todos = await Todo.get(SessionID.make(sessionID)).catch(() => [])
         actions.push(`todoread ${todos.length}`)
         results.push(`tool: todoread\nstatus: ok\noutput:\n${JSON.stringify(todos, null, 2)}`)
         await done("todoread", JSON.stringify(todos, null, 2))
