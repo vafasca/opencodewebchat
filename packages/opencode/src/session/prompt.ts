@@ -460,7 +460,7 @@ export namespace SessionPrompt {
       "- Si necesitas herramientas, devuelve SOLO un bloque ```opencode-actions con JSON válido.",
       "- Herramientas soportadas: write, read, edit, bash, glob, grep, webfetch, todowrite, todoread, apply_patch, invalid.",
       '- Formato JSON: {"actions":[{"tool":"bash","cmd":"ls -la"}]}',
-      '- Formato apply_patch: {"actions":[{"tool":"apply_patch","patch":"*** Begin Patch\\n*** Update File: index.html\\n...\\n*** End Patch"}]}',
+      '- Formato apply_patch: {"actions":[{"tool":"apply_patch","patch":"--- a/index.html\\n+++ b/index.html\\n@@ -1,3 +1,3 @@\\n context\\n-old line\\n+new line"}]}',
       "- Si el proyecto está vacío y piden un framework/app completa (Angular/React/Vue/etc), usa bash para scaffold real (ej: ng new, npm create) y luego aplica edit/write sobre ese scaffold.",
       "- No simules archivos creados: si no ejecutaste acciones reales, no afirmes que creaste archivos.",
       "- Espera el resultado de herramientas antes de dar la respuesta final.",
@@ -471,23 +471,43 @@ export namespace SessionPrompt {
   }
 
   const webchatContext = async () => {
-    const dir = await fs.readdir(Instance.directory, { withFileTypes: true }).catch(() => [])
-    const file = dir
-      .filter((item) => item.isFile())
-      .map((item) => item.name)
-      .filter((item) => /\.(html|css|js|jsx|ts|tsx|json|md)$/i.test(item))
-      .slice(0, 8)
+    const ok = /\.(html|css|js|jsx|ts|tsx|json|md)$/i
+    const skip = /(node_modules|\.git|dist|build|\.next|coverage)/
+    const walk = async (dir: string, dep = 0): Promise<string[]> => {
+      if (dep > 3) return []
+      const row = await fs.readdir(dir, { withFileTypes: true }).catch(() => [])
+      const list = await Promise.all(
+        row.map(async (item) => {
+          if (skip.test(item.name)) return []
+          const full = path.join(dir, item.name)
+          if (item.isDirectory()) return walk(full, dep + 1)
+          if (!item.isFile() || !ok.test(item.name)) return []
+          return [full]
+        }),
+      )
+      return list.flat()
+    }
+    const all = await walk(Instance.directory)
+    const file = all
+      .sort((a, b) => {
+        const x = /[/\\](src|app)[/\\]/.test(a) ? 0 : 1
+        const y = /[/\\](src|app)[/\\]/.test(b) ? 0 : 1
+        if (x !== y) return x - y
+        return a.localeCompare(b)
+      })
+      .slice(0, 12)
     const out = await Promise.all(
       file.map(async (item) => {
-        const body = await Filesystem.readText(path.join(Instance.directory, item)).catch(() => "")
+        const body = await Filesystem.readText(item).catch(() => "")
         if (!body.trim()) return ""
+        const rel = path.relative(Instance.directory, item) || path.basename(item)
         const ext = path.extname(item).replace(".", "").toLowerCase()
         const lang = ext === "js" ? "javascript" : ext || "text"
-        return [`Ruta: ${item}`, `\`\`\`${lang}`, body.slice(0, 12000), "```"].join("\n")
+        return [`Ruta: ${rel}`, `\`\`\`${lang}`, body.slice(0, 8000), "```"].join("\n")
       }),
     )
     if (out.some((item) => item.trim())) return out.filter((item) => item.trim())
-    return ["(sin archivos detectados en la raíz del proyecto)"]
+    return ["(sin archivos detectados en el proyecto)"]
   }
 
   const webchatFiles = (txt: string) => {
@@ -577,7 +597,7 @@ export namespace SessionPrompt {
         await Session.updatePart({
           id: partID,
           messageID: assistant.id,
-          sessionID,
+          sessionID: SessionID.construct(sessionID),
           type: "tool",
           callID,
           tool: item.tool,
@@ -593,7 +613,7 @@ export namespace SessionPrompt {
         await Session.updatePart({
           id: partID,
           messageID: assistant.id,
-          sessionID,
+          sessionID: SessionID.construct(sessionID),
           type: "tool",
           callID,
           tool: item.tool,
@@ -612,7 +632,7 @@ export namespace SessionPrompt {
         await Session.updatePart({
           id: partID,
           messageID: assistant.id,
-          sessionID,
+          sessionID: SessionID.construct(sessionID),
           type: "tool",
           callID,
           tool: item.tool,
@@ -713,14 +733,44 @@ export namespace SessionPrompt {
       }
       if (item.tool === "apply_patch") {
         more = true
-        const result = await webchatApply(item.patch)
-        const output = [
-          ...result.done.map((f) => `ok: ${f}`),
-          ...result.skip.map((f) => `skip: ${f}`),
-        ].join("\n")
-        actions.push(`apply_patch (${result.done.length} aplicados, ${result.skip.length} omitidos)`)
-        results.push(`tool: apply_patch\nstatus: ok\noutput:\n${output || "(empty)"}`)
-        await done("apply_patch", output || "(empty)")
+        const file = item.patch
+          .split("\n")
+          .find((row) => row.startsWith("+++ "))
+          ?.replace("+++ ", "")
+          .replace(/^b\//, "")
+          .trim()
+        if (!file) {
+          actions.push("apply_patch (no se pudo detectar archivo)")
+          results.push("tool: apply_patch\nstatus: error\nreason: no se encontró +++ en el patch")
+          await fail("no se encontró +++ en el patch")
+          continue
+        }
+        const abs = path.resolve(Instance.directory, file)
+        if (!Filesystem.contains(Instance.directory, abs)) {
+          actions.push(`apply_patch ${file} (fuera del workspace)`)
+          results.push(`tool: apply_patch\nfile: ${file}\nstatus: error\nreason: ruta fuera del workspace`)
+          await fail("ruta fuera del workspace")
+          continue
+        }
+        const src = (await Filesystem.readText(abs).catch(() => "")).replace(/\r\n/g, "\n")
+        const next = (() => {
+          try {
+            return applyPatch(src, item.patch)
+          } catch {
+            return false
+          }
+        })()
+        const body = typeof next === "string" ? next : webchatPatchFallback(src, item.patch)
+        if (!body || body === src) {
+          actions.push(`apply_patch ${file} (sin cambios / error)`)
+          results.push(`tool: apply_patch\nfile: ${file}\nstatus: error\nreason: patch no aplicable`)
+          await fail("patch no aplicable")
+          continue
+        }
+        await Filesystem.write(abs, body)
+        actions.push(`apply_patch ${file}`)
+        results.push(`tool: apply_patch\nfile: ${file}\nstatus: ok`)
+        await done(`apply_patch: ${file}`, "ok")
         continue
       }
       if (item.tool === "glob") {
