@@ -51,6 +51,7 @@ import { GoogleAuth } from "google-auth-library"
 import { ProviderTransform } from "./transform"
 import { Installation } from "../installation"
 import { ModelID, ProviderID } from "./schema"
+import { WebchatLanguageModel } from "./webchat"
 
 export namespace Provider {
   const log = Log.create({ service: "provider" })
@@ -180,6 +181,11 @@ export namespace Provider {
       return {
         autoload: Object.keys(input.models).length > 0,
         options: hasKey ? {} : { apiKey: "public" },
+        async getModel(sdk: any, modelID: string, _options?: Record<string, any>) {
+          if (modelID.startsWith("webchat")) return new WebchatLanguageModel(modelID)
+          if (useLanguageModel(sdk)) return sdk.languageModel(modelID)
+          return sdk.chat ? sdk.chat(modelID) : sdk.responses(modelID)
+        },
       }
     },
     openai: async () => {

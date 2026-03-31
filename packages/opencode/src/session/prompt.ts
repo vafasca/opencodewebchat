@@ -203,13 +203,6 @@ export namespace SessionPrompt {
       return message
     }
 
-    if (input.webchat?.enabled === true) {
-      return promptWebchat({
-        input,
-        message,
-      })
-    }
-
     return loop({ sessionID: input.sessionID })
   })
 
