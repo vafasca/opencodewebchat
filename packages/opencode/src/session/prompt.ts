@@ -352,6 +352,22 @@ export namespace SessionPrompt {
         acts.push(...item.actions)
       }
     }
+    if (app && !acts.length) {
+      const retry = await run(
+        [
+          "Debes ejecutar acciones reales ahora.",
+          "No respondas con explicación, bloqueo, ni preguntas.",
+          "Devuelve SOLO un bloque ```opencode-actions con JSON válido.",
+          "Si detectas npm E401/registry privado, primero corrige registry con bash y luego ejecuta scaffold.",
+          "Para Angular en proyecto vacío: usa bash con ng/npx y luego edit/write sobre src/.",
+        ].join("\n"),
+      ).catch(() => "")
+      if (retry.trim()) {
+        raw = [raw, "", retry].join("\n")
+        const item = await webchatExec(retry, input.input.sessionID, assistant, cfg.webchat?.timeout ?? 120_000)
+        acts.push(...item.actions)
+      }
+    }
     const edit = await webchatApply(raw)
     const bad = edit.skip
       .filter((item) => item.includes("patch inválido/no aplicable"))
