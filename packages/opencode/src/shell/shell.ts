@@ -43,13 +43,20 @@ export namespace Shell {
 
   function fallback() {
     if (process.platform === "win32") {
-      if (Flag.OPENCODE_GIT_BASH_PATH) return Flag.OPENCODE_GIT_BASH_PATH
+      if (Flag.OPENCODE_GIT_BASH_PATH && Filesystem.stat(Flag.OPENCODE_GIT_BASH_PATH)?.size) {
+        return Flag.OPENCODE_GIT_BASH_PATH
+      }
       const git = which("git")
       if (git) {
-        // git.exe is typically at: C:\Program Files\Git\cmd\git.exe
-        // bash.exe is at: C:\Program Files\Git\bin\bash.exe
-        const bash = path.join(git, "..", "..", "bin", "bash.exe")
-        if (Filesystem.stat(bash)?.size) return bash
+        const dir = path.win32.dirname(git)
+        const list = [
+          path.win32.join(dir, "..", "bash.exe"),
+          path.win32.join(dir, "..", "bin", "bash.exe"),
+          path.win32.join(dir, "..", "..", "bin", "bash.exe"),
+          path.win32.join(dir, "..", "..", "usr", "bin", "bash.exe"),
+        ]
+        const found = list.find((item) => Filesystem.stat(path.win32.normalize(item))?.size)
+        if (found) return path.win32.normalize(found)
       }
       return process.env.COMSPEC || "cmd.exe"
     }

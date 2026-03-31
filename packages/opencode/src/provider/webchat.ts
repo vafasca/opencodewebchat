@@ -182,6 +182,17 @@ const pickDesc = (input: Record<string, unknown>) => {
 }
 
 
+
+const makePatch = (file: string, content: string) => {
+  const body = content
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((item) => `+${item}`)
+    .join("\n")
+  return ["*** Begin Patch", `*** Add File: ${file}`, body, "*** End Patch"].join("\n")
+}
+
 const rewriteBash = (input: Record<string, unknown>) => {
   const cmd = typeof input.command === "string" ? input.command.trim() : ""
   const m = cmd.match(/^cd\s+([^&;]+?)\s*&&\s*(.+)$/)
@@ -216,6 +227,17 @@ const normalizeCall = (call: { tool: string; input: Record<string, unknown> }, t
 
   if (!names.size || names.has(tool) || tool === "invalid") {
     return { tool, input }
+  }
+
+  if (tool === "write" && names.has("apply_patch")) {
+    if (typeof input.file === "string" && typeof input.content === "string") {
+      return {
+        tool: "apply_patch",
+        input: {
+          patchText: makePatch(input.file, input.content),
+        },
+      }
+    }
   }
 
   return {
