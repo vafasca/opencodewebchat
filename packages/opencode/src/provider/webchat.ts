@@ -48,7 +48,34 @@ const pick = (msg: Parameters<LanguageModelV2["doGenerate"]>[0]["prompt"][number
   return []
 }
 
-const format = (prompt: Parameters<LanguageModelV2["doGenerate"]>[0]["prompt"], system?: string) => {
+
+const hasTools = (tools: unknown) => {
+  if (Array.isArray(tools)) return tools.length > 0
+  if (!tools || typeof tools !== "object") return false
+  if ("length" in tools && typeof tools.length === "number") return tools.length > 0
+  return Object.keys(tools).length > 0
+}
+
+const protocol = () =>
+  [
+    "",
+    "TOOLS PROTOCOL (MANDATORY):",
+    "- If the task needs actions in filesystem/terminal, respond ONLY with a single ```opencode-actions block.",
+    "- The block MUST be valid JSON with shape: {\"actions\":[...]}.",
+    "- Use native tools: bash, write, edit, read, glob, grep, apply_patch, webfetch, todowrite, todoread.",
+    "- Do not include explanations outside the block when using tools.",
+    "- Example:",
+    "```opencode-actions",
+    '{"actions":[{"tool":"bash","cmd":"npm create ..."},{"tool":"write","file":"src/app/app.component.ts","content":"..."}]}',
+    "```",
+  ].join("\n")
+
+
+const format = (
+  prompt: Parameters<LanguageModelV2["doGenerate"]>[0]["prompt"],
+  system?: string,
+  tools?: unknown,
+) => {
   const out: string[] = []
   if (system?.trim()) out.push(`System:\n${system.trim()}`)
   for (const msg of prompt) {
@@ -57,7 +84,9 @@ const format = (prompt: Parameters<LanguageModelV2["doGenerate"]>[0]["prompt"], 
     if (!chunks.length) continue
     out.push(`${role}:\n${chunks.join("\n")}`)
   }
-  return out.join("\n\n")
+  const body = out.join("\n\n")
+  if (!hasTools(tools)) return body
+  return `${body}\n\n${protocol()}`
 }
 
 const parse = (raw: string) => {
@@ -124,7 +153,7 @@ export class WebchatLanguageModel implements LanguageModelV2 {
     options: Parameters<LanguageModelV2["doGenerate"]>[0],
   ): Promise<Awaited<ReturnType<LanguageModelV2["doGenerate"]>>> {
     const cfg = await Config.get()
-    const prompt = format(options.prompt, options.system)
+    const prompt = format(options.prompt, options.system, options.tools)
     const model = pickModel(this.modelId, cfg)
     const raw = await Webchat.run({
       prompt,
@@ -167,7 +196,7 @@ export class WebchatLanguageModel implements LanguageModelV2 {
     options: Parameters<LanguageModelV2["doStream"]>[0],
   ): Promise<Awaited<ReturnType<LanguageModelV2["doStream"]>>> {
     const cfg = await Config.get()
-    const prompt = format(options.prompt, options.system)
+    const prompt = format(options.prompt, options.system, options.tools)
     const model = pickModel(this.modelId, cfg)
     const raw = await Webchat.run({
       prompt,
