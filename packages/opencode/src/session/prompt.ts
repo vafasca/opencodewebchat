@@ -585,6 +585,7 @@ export namespace SessionPrompt {
     const actions: string[] = []
     const results: string[] = []
     let more = false
+    const seen = new Set<string>()
     const data = [...txt.matchAll(/```opencode-actions\s*\n([\s\S]*?)```/gi)]
       .flatMap((item) => parseActions(item[1] ?? ""))
       .flatMap((item) => item.actions)
@@ -595,6 +596,9 @@ export namespace SessionPrompt {
       )
     }
     for (const item of data) {
+      const hash = JSON.stringify(item)
+      if (seen.has(hash)) continue
+      seen.add(hash)
       const start = Date.now()
       const callID = ulid()
       const partID = PartID.ascending()
@@ -722,7 +726,7 @@ export namespace SessionPrompt {
           cwd: Instance.directory,
           stdout: "pipe",
           stderr: "pipe",
-          timeout,
+          timeout: Math.max(timeout, 600_000),
         })
         let out = ""
         let err = ""
