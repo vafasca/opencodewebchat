@@ -249,6 +249,35 @@ const normalizeCall = (call: { tool: string; input: Record<string, unknown> }, t
   }
 }
 
+
+const pickDone = (prompt: Parameters<LanguageModelV2["doGenerate"]>[0]["prompt"]) => {
+  const set = new Set<string>()
+  for (const msg of prompt) {
+    if (!Array.isArray(msg.content)) continue
+    for (const part of msg.content) {
+      if (!part || typeof part !== "object") continue
+      if (!("type" in part) || part.type !== "tool-call") continue
+      if (!("toolName" in part) || typeof part.toolName !== "string") continue
+      const key = `${part.toolName}:${typeof part.input === "string" ? part.input : JSON.stringify(part.input ?? {})}`
+      set.add(key)
+    }
+  }
+  return set
+}
+
+const pickStep = (
+  list: { tool: string; input: Record<string, unknown> }[],
+  prompt: Parameters<LanguageModelV2["doGenerate"]>[0]["prompt"],
+) => {
+  if (list.length <= 1) return list
+  const done = pickDone(prompt)
+  for (const item of list) {
+    const key = `${item.tool}:${JSON.stringify(item.input)}`
+    if (!done.has(key)) return [item]
+  }
+  return [list[0]]
+}
+
 const pickCalls = (raw: string, tools?: unknown) => {
   const list = parse(raw).map((item) => normalizeCall(item, tools))
   if (list.length) return list
@@ -314,7 +343,7 @@ export class WebchatLanguageModel implements LanguageModelV2 {
       headless: cfg.webchat?.headless,
       sessionID: pickSession(options.headers),
     })
-    const calls = pickCalls(raw, options.tools)
+    const calls = pickStep(pickCalls(raw, options.tools), options.prompt)
     const content: LanguageModelV2Content[] = calls.length
       ? calls.map((item) => ({
           type: "tool-call",
@@ -357,7 +386,7 @@ export class WebchatLanguageModel implements LanguageModelV2 {
       headless: cfg.webchat?.headless,
       sessionID: pickSession(options.headers),
     })
-    const calls = pickCalls(raw, options.tools)
+    const calls = pickStep(pickCalls(raw, options.tools), options.prompt)
     const finishReason: LanguageModelV2FinishReason = calls.length ? "tool-calls" : "stop"
     const providerMetadata: SharedV2ProviderMetadata = { webchat: { calls: calls.length } }
 
