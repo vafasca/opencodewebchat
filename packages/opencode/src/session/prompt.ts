@@ -53,6 +53,8 @@ import { Process } from "@/util/process"
 import { Config } from "@/config/config"
 import { Webchat } from "@/webchat"
 import { applyPatch } from "diff"
+import { Glob } from "@/util/glob"
+import { Todo } from "./todo"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -223,6 +225,13 @@ export namespace SessionPrompt {
     })
     const max = 6
     const acts: string[] = []
+    const ask = input.message.parts
+      .filter((item) => item.type === "text")
+      .map((item) => item.text)
+      .join("\n")
+      .toLowerCase()
+    const base = await fs.readdir(Instance.directory, { withFileTypes: true }).catch(() => [])
+    const empty = base.filter((item) => item.isFile() || item.isDirectory()).length === 0
     const run = async (prompt: string) =>
       Webchat.run({
         prompt,
@@ -236,70 +245,10 @@ export namespace SessionPrompt {
         settle: cfg.webchat?.settle,
         headless: cfg.webchat?.headless,
       })
-    let raw = await run(txt).catch((err) => {
-      const txt = err instanceof Error ? err.message : String(err)
-      log.error("prompt.webchat.failed", {
-        sessionID: input.input.sessionID,
-        error: txt,
-      })
-      return [
-        "Webchat falló al ejecutar Playwright.",
-        "Posibles causas:",
-        "- Playwright no está instalado",
-        "- Navegador channel no disponible (chrome/msedge)",
-        "- No hay sesión iniciada en el chat objetivo",
-        "",
-        `Detalle: ${txt}`,
-        "",
-        "Prueba: bunx playwright install",
-      ].join("\n")
-    })
-    for (let i = 0; i < max; i++) {
-      const item = await webchatExec(raw)
-      if (!item.actions.length) break
-      acts.push(...item.actions)
-      const next = await run(webchatFollowup(item.results, i + 1, max)).catch(() => "")
-      if (!next.trim()) break
-      raw = [raw, "", next].join("\n")
-    }
-    const save = await webchatSave(raw)
-    const edit = await webchatApply(raw)
-    const bad = edit.skip
-      .filter((item) => item.includes("patch inválido/no aplicable"))
-      .map((item) => item.split(" -> ")[0]?.trim())
-      .filter((item): item is string => !!item)
-    if (bad.length) {
-      const retry = await run(
-        [
-          "No pude aplicar tus diffs por formato no compatible.",
-          `Devuelve SOLO diffs unificados para: ${[...new Set(bad)].join(", ")}`,
-          "Si no puedes dar diff canónico, usa opencode-actions con tool edit.",
-          'Formato recomendado: {"actions":[{"tool":"edit","file":"index.html","oldString":"...","newString":"..."}]}',
-          "No incluyas explicaciones.",
-        ].join("\n"),
-      ).catch(() => "")
-      if (retry.trim()) {
-        raw = [raw, "", retry].join("\n")
-        const fix = await webchatApply(retry)
-        edit.done.push(...fix.done)
-        edit.skip.push(...fix.skip.map((item) => `retry: ${item}`))
-      }
-    }
-    const norm = webchatNorm(raw)
-    const content = save.length || acts.length || edit.done.length || edit.skip.length
-      ? [
-          raw,
-          ...(acts.length ? ["", "Acciones ejecutadas automáticamente:", ...acts.map((item) => `- ${item}`)] : []),
-          ...(edit.done.length ? ["", "Ediciones aplicadas automáticamente:", ...edit.done.map((item) => `- ${item}`)] : []),
-          ...(edit.skip.length ? ["", "Ediciones omitidas (diagnóstico):", ...edit.skip.map((item) => `- ${item}`)] : []),
-          ...(norm ? ["", "Formato normalizado (compatible):", norm] : []),
-          "",
-          "Archivos creados automáticamente:",
-          ...save.map((item) => `- ${item}`),
-        ].join("\n")
-      : raw
     const model =
-      input.message.info.role === "assistant" ? input.message.info.mode : await lastModel(input.input.sessionID)
+      input.message.info.role === "assistant"
+        ? input.message.info.mode
+        : await lastModel(input.input.sessionID).catch(() => input.message.info.model.modelID)
     const assistant = (await Session.updateMessage({
       id: MessageID.ascending(),
       parentID: input.message.info.id,
@@ -326,6 +275,123 @@ export namespace SessionPrompt {
       finish: "stop",
       sessionID: input.input.sessionID,
     })) as MessageV2.Assistant
+    let raw = await run(txt).catch((err) => {
+      const txt = err instanceof Error ? err.message : String(err)
+      log.error("prompt.webchat.failed", {
+        sessionID: input.input.sessionID,
+        error: txt,
+      })
+      return [
+        "Webchat falló al ejecutar Playwright.",
+        "Posibles causas:",
+        "- Playwright no está instalado",
+        "- Navegador channel no disponible (chrome/msedge)",
+        "- No hay sesión iniciada en el chat objetivo",
+        "",
+        `Detalle: ${txt}`,
+        "",
+        "Prueba: bunx playwright install",
+      ].join("\n")
+    })
+    let now = raw
+    for (let i = 0; i < max; i++) {
+      const item = await webchatExec(now, input.input.sessionID, assistant, cfg.webchat?.timeout ?? 120_000)
+      if (!item.actions.length) break
+      acts.push(...item.actions)
+      if (!item.more) break
+      const next = await run(webchatFollowup(item.results, i + 1, max)).catch(() => "")
+      if (!next.trim()) break
+      raw = [raw, "", next].join("\n")
+      now = next
+    }
+    const miss = !acts.length && !webchatDiffs(raw).length && !webchatFiles(raw).length
+    const app = empty && /(angular|react|vue|next|nuxt|svelte)/i.test(ask)
+    const nobash = app && acts.length && !acts.some((item) => item.startsWith("bash "))
+    const onlybash = app && acts.length && acts.every((item) => item.startsWith("bash "))
+    if (nobash) {
+      const retry = await run(
+        [
+          "Debes usar scaffold real del framework con bash en este proyecto vacío.",
+          "Devuelve SOLO opencode-actions JSON con pasos bash + edit/write posteriores.",
+          "Ejemplo Angular: ng new <nombre> ... y luego edits en src/.",
+          "No entregues scaffold manual solo con write de archivos sueltos.",
+        ].join("\n"),
+      ).catch(() => "")
+      if (retry.trim()) {
+        raw = [raw, "", retry].join("\n")
+        const item = await webchatExec(retry, input.input.sessionID, assistant, cfg.webchat?.timeout ?? 120_000)
+        acts.push(...item.actions)
+      }
+    }
+    if (onlybash) {
+      const retry = await run(
+        [
+          "Scaffold detectado.",
+          "Ahora aplica la implementación solicitada con acciones reales edit/write sobre el proyecto creado.",
+          "Devuelve SOLO opencode-actions JSON.",
+          "No respondas con explicación.",
+        ].join("\n"),
+      ).catch(() => "")
+      if (retry.trim()) {
+        raw = [raw, "", retry].join("\n")
+        const item = await webchatExec(retry, input.input.sessionID, assistant, cfg.webchat?.timeout ?? 120_000)
+        acts.push(...item.actions)
+      }
+    }
+    if (miss && /archivos?\s+cread|se\s+cre[oó]|estructura\s+generada|puedo\s+generar/i.test(raw)) {
+      const retry = await run(
+        [
+          "No aplicaste ningún cambio real en disco.",
+          "Devuelve cambios accionables ahora.",
+          "Opciones válidas:",
+          '1) Bloque ```opencode-actions con write/edit (JSON válido).',
+          "2) Archivos nuevos en formato Ruta + bloque de código completo por archivo.",
+          "No incluyas descripción ni texto de marketing.",
+        ].join("\n"),
+      ).catch(() => "")
+      if (retry.trim()) {
+        raw = [raw, "", retry].join("\n")
+        const item = await webchatExec(retry, input.input.sessionID, assistant, cfg.webchat?.timeout ?? 120_000)
+        acts.push(...item.actions)
+      }
+    }
+    const edit = await webchatApply(raw)
+    const bad = edit.skip
+      .filter((item) => item.includes("patch inválido/no aplicable"))
+      .map((item) => item.split(" -> ")[0]?.trim())
+      .filter((item): item is string => !!item)
+    if (bad.length) {
+      const retry = await run(
+        [
+          "No pude aplicar tus diffs por formato no compatible.",
+          `Devuelve SOLO un bloque \`\`\`opencode-actions con ediciones para: ${[...new Set(bad)].join(", ")}`,
+          "NO uses diff ni texto fuera del bloque.",
+          "Usa tool edit y agrega una acción por cada archivo involucrado.",
+          'Formato: {"actions":[{"tool":"edit","file":"index.html","oldString":"...","newString":"..."},{"tool":"edit","file":"style.css","oldString":"...","newString":"..."},{"tool":"edit","file":"script.js","oldString":"...","newString":"..."}]}',
+          "No incluyas explicaciones.",
+        ].join("\n"),
+      ).catch(() => "")
+      if (retry.trim()) {
+        raw = [raw, "", retry].join("\n")
+        const fix = await webchatApply(retry)
+        edit.done.push(...fix.done)
+        edit.skip.push(...fix.skip.map((item) => `retry: ${item}`))
+      }
+    }
+    const save = acts.length || edit.done.length ? [] : await webchatSave(raw)
+    const norm = webchatNorm(raw)
+    const content = save.length || acts.length || edit.done.length || edit.skip.length
+      ? [
+          raw,
+          ...(acts.length ? ["", "Acciones ejecutadas automáticamente:", ...acts.map((item) => `- ${item}`)] : []),
+          ...(edit.done.length ? ["", "Ediciones aplicadas automáticamente:", ...edit.done.map((item) => `- ${item}`)] : []),
+          ...(edit.skip.length ? ["", "Ediciones omitidas (diagnóstico):", ...edit.skip.map((item) => `- ${item}`)] : []),
+          ...(norm ? ["", "Formato normalizado (compatible):", norm] : []),
+          "",
+          "Archivos creados automáticamente:",
+          ...save.map((item) => `- ${item}`),
+        ].join("\n")
+      : raw
     await Session.updatePart({
       id: PartID.ascending(),
       messageID: assistant.id,
@@ -371,7 +437,7 @@ export namespace SessionPrompt {
       "- Mantén el mismo estilo de ejecución de ingeniería (acciones concretas, rutas exactas).",
       "",
       "Archivos actuales en disco (fuente de verdad para editar):",
-      ...(await webchatContext()),
+      ...(await webchatContext(ask)),
       "",
       "Solicitud del usuario:",
       ask,
@@ -381,18 +447,10 @@ export namespace SessionPrompt {
       "- Evita saludos largos o plantillas; entrega directamente el resultado.",
       "- Si falta un dato crítico, haz una sola pregunta breve. Si no falta, procede.",
       "- Si creas o editas archivos, indica rutas exactas y qué hiciste.",
-      "- Para editar archivos existentes: devuelve SOLO diff unificado (3 líneas de contexto).",
-      "- Alternativa recomendada (más estable): usa ```opencode-actions con tool edit.",
+      "- Para editar archivos existentes: usa SIEMPRE ```opencode-actions con tool edit.",
+      "- NO uses diffs artifact ni diff unificado.",
       '- Formato edit: {"actions":[{"tool":"edit","file":"index.html","oldString":"...","newString":"..."}]}',
-      "- Formato estricto de edición:",
-      "  Modificación: <archivo>",
-      "  ```diff",
-      "  --- a/<archivo>",
-      "  +++ b/<archivo>",
-      "  @@ -<inicio>,<cantidad> +<inicio>,<cantidad> @@",
-      "  -línea vieja",
-      "  +línea nueva",
-      "  ```",
+      "- Si hay múltiples archivos involucrados (por ejemplo html/css/js), incluye todas las acciones edit necesarias en el mismo bloque.",
       "- No reescribas el archivo completo si ya existe.",
       "- Para archivos nuevos: usa formato por archivo:",
       "  Ruta: <archivo>",
@@ -400,8 +458,11 @@ export namespace SessionPrompt {
       "  ...contenido...",
       "  ```",
       "- Si necesitas herramientas, devuelve SOLO un bloque ```opencode-actions con JSON válido.",
-      "- Herramientas soportadas: write, read, edit, bash.",
+      "- Herramientas soportadas: write, read, edit, bash, glob, grep, webfetch, todowrite, todoread, apply_patch, invalid.",
       '- Formato JSON: {"actions":[{"tool":"bash","cmd":"ls -la"}]}',
+      '- Formato apply_patch: {"actions":[{"tool":"apply_patch","patch":"--- a/index.html\\n+++ b/index.html\\n@@ -1,3 +1,3 @@\\n context\\n-old line\\n+new line"}]}',
+      "- Si el proyecto está vacío y piden un framework/app completa (Angular/React/Vue/etc), usa bash para scaffold real (ej: ng new, npm create) y luego aplica edit/write sobre ese scaffold.",
+      "- No simules archivos creados: si no ejecutaste acciones reales, no afirmes que creaste archivos.",
       "- Espera el resultado de herramientas antes de dar la respuesta final.",
     ]
       .filter((item) => item)
@@ -409,24 +470,50 @@ export namespace SessionPrompt {
       .trim()
   }
 
-  const webchatContext = async () => {
-    const dir = await fs.readdir(Instance.directory, { withFileTypes: true }).catch(() => [])
-    const file = dir
-      .filter((item) => item.isFile())
-      .map((item) => item.name)
-      .filter((item) => /\.(html|css|js|jsx|ts|tsx|json|md)$/i.test(item))
-      .slice(0, 8)
+  const webchatContext = async (ask = "") => {
+    const ok = /\.(html|css|js|jsx|ts|tsx|json|md)$/i
+    const skip = /(node_modules|\.git|dist|build|\.next|coverage)/
+    const walk = async (dir: string, dep = 0): Promise<string[]> => {
+      if (dep > 3) return []
+      const row = await fs.readdir(dir, { withFileTypes: true }).catch(() => [])
+      const list = await Promise.all(
+        row.map(async (item) => {
+          if (skip.test(item.name)) return []
+          const full = path.join(dir, item.name)
+          if (item.isDirectory()) return walk(full, dep + 1)
+          if (!item.isFile() || !ok.test(item.name)) return []
+          return [full]
+        }),
+      )
+      return list.flat()
+    }
+    const all = await walk(Instance.directory)
+    const hit = ask.toLowerCase()
+    const file = all
+      .sort((a, b) => {
+        const ax = a.toLowerCase()
+        const bx = b.toLowerCase()
+        const aAsk = hit && (hit.includes(path.basename(ax)) || hit.includes(ax.replace(/\\/g, "/"))) ? -1 : 0
+        const bAsk = hit && (hit.includes(path.basename(bx)) || hit.includes(bx.replace(/\\/g, "/"))) ? -1 : 0
+        if (aAsk !== bAsk) return aAsk - bAsk
+        const x = /[/\\](src|app)[/\\]/.test(a) ? 0 : 1
+        const y = /[/\\](src|app)[/\\]/.test(b) ? 0 : 1
+        if (x !== y) return x - y
+        return a.localeCompare(b)
+      })
+      .slice(0, 20)
     const out = await Promise.all(
       file.map(async (item) => {
-        const body = await Filesystem.readText(path.join(Instance.directory, item)).catch(() => "")
+        const body = await Filesystem.readText(item).catch(() => "")
         if (!body.trim()) return ""
+        const rel = path.relative(Instance.directory, item) || path.basename(item)
         const ext = path.extname(item).replace(".", "").toLowerCase()
         const lang = ext === "js" ? "javascript" : ext || "text"
-        return [`Ruta: ${item}`, `\`\`\`${lang}`, body.slice(0, 12000), "```"].join("\n")
+        return [`Ruta: ${rel}`, `\`\`\`${lang}`, body.slice(0, 8000), "```"].join("\n")
       }),
     )
     if (out.some((item) => item.trim())) return out.filter((item) => item.trim())
-    return ["(sin archivos detectados en la raíz del proyecto)"]
+    return ["(sin archivos detectados en el proyecto)"]
   }
 
   const webchatFiles = (txt: string) => {
@@ -473,7 +560,11 @@ export namespace SessionPrompt {
   const webchatSave = async (txt: string) => {
     const out: string[] = []
     for (const item of webchatFiles(txt)) {
-      await Filesystem.write(item.file, item.body)
+      await fs.mkdir(path.dirname(item.file), { recursive: true }).catch(() => undefined)
+      const ok = await Filesystem.write(item.file, item.body)
+        .then(() => true)
+        .catch(() => false)
+      if (!ok) continue
       const file = item.file
       out.push(path.relative(Instance.directory, file) || path.basename(file))
     }
@@ -490,23 +581,97 @@ export namespace SessionPrompt {
       })
       .join("\n\n")
 
-  const webchatExec = async (txt: string) => {
+  const webchatExec = async (txt: string, sessionID?: string, assistant?: MessageV2.Assistant, timeout = 120_000) => {
     const actions: string[] = []
     const results: string[] = []
+    let more = false
     const data = [...txt.matchAll(/```opencode-actions\s*\n([\s\S]*?)```/gi)]
       .flatMap((item) => parseActions(item[1] ?? ""))
       .flatMap((item) => item.actions)
+    if (!data.length) {
+      data.push(
+        ...parseActions(txt)
+          .flatMap((item) => item.actions),
+      )
+    }
     for (const item of data) {
+      const start = Date.now()
+      const callID = ulid()
+      const partID = PartID.ascending()
+      const withTool = assistant && sessionID
+      if (withTool) {
+        await Session.updatePart({
+          id: partID,
+          messageID: assistant.id,
+          sessionID: SessionID.construct(sessionID),
+          type: "tool",
+          callID,
+          tool: item.tool,
+          state: {
+            status: "running",
+            input: item as Record<string, unknown>,
+            time: { start },
+          },
+        })
+      }
+      const done = async (title: string, output: string) => {
+        if (!withTool) return
+        await Session.updatePart({
+          id: partID,
+          messageID: assistant.id,
+          sessionID: SessionID.construct(sessionID),
+          type: "tool",
+          callID,
+          tool: item.tool,
+          state: {
+            status: "completed",
+            input: item as Record<string, unknown>,
+            output,
+            title,
+            metadata: {},
+            time: { start, end: Date.now() },
+          },
+        })
+      }
+      const fail = async (error: string) => {
+        if (!withTool) return
+        await Session.updatePart({
+          id: partID,
+          messageID: assistant.id,
+          sessionID: SessionID.construct(sessionID),
+          type: "tool",
+          callID,
+          tool: item.tool,
+          state: {
+            status: "error",
+            input: item as Record<string, unknown>,
+            error,
+            time: { start, end: Date.now() },
+          },
+        })
+      }
       if (item.tool === "write") {
         const file = path.resolve(Instance.directory, item.file)
         if (!Filesystem.contains(Instance.directory, file)) continue
-        await Filesystem.write(file, item.content)
+        await fs.mkdir(path.dirname(file), { recursive: true }).catch(() => undefined)
+        const ok = await Filesystem.write(file, item.content)
+          .then(() => true)
+          .catch(() => false)
         const rel = path.relative(Instance.directory, file) || path.basename(file)
-        actions.push(`write ${rel}`)
-        results.push(`tool: write\nfile: ${rel}\nstatus: ok`)
+        if (ok) {
+          actions.push(`write ${rel}`)
+          results.push(`tool: write\nfile: ${rel}\nstatus: ok`)
+          await done(`write: ${rel}`, "ok")
+          continue
+        }
+        more = true
+        actions.push(`write ${rel} (error)`)
+        results.push(`tool: write\nfile: ${rel}\nstatus: error\nreason: no se pudo escribir archivo`)
+        await fail("no se pudo escribir archivo")
         continue
       }
       if (item.tool === "read") {
+        more = true
         const file = path.resolve(Instance.directory, item.file)
         if (!Filesystem.contains(Instance.directory, file)) continue
         const body = await Filesystem.readText(file).catch(() => "")
@@ -514,6 +679,7 @@ export namespace SessionPrompt {
         const rel = path.relative(Instance.directory, file) || path.basename(file)
         actions.push(`read ${rel} (${body.length} chars)`)
         results.push(`tool: read\nfile: ${rel}\nstatus: ok\noutput:\n${body}`)
+        await done(`read: ${rel}`, body)
         continue
       }
       if (item.tool === "edit") {
@@ -523,33 +689,208 @@ export namespace SessionPrompt {
         if (!old) continue
         const src = old.replace(/\r\n/g, "\n")
         if (!src.includes(item.oldString)) {
+          more = true
           actions.push(`edit ${item.file} (sin match oldString)`)
           results.push(`tool: edit\nfile: ${item.file}\nstatus: error\nreason: oldString no encontrado`)
+          await fail("oldString no encontrado")
           continue
         }
         await Filesystem.write(file, src.replace(item.oldString, item.newString))
         const rel = path.relative(Instance.directory, file) || path.basename(file)
         actions.push(`edit ${rel}`)
         results.push(`tool: edit\nfile: ${rel}\nstatus: ok`)
+        await done(`edit: ${rel}`, "ok")
         continue
       }
       if (item.tool === "bash") {
-        const out = await Process.run([item.cmd], {
+        more = true
+        const cmd = item.cmd.trim()
+        const bad =
+          !cmd ||
+          /--skip\s*$/i.test(cmd) ||
+          /\\\s*$/.test(cmd) ||
+          cmd.split('"').length % 2 === 0 ||
+          cmd.split("'").length % 2 === 0
+        if (bad) {
+          actions.push(`bash ${cmd || "(empty)"} (invalid)`)
+          results.push(`tool: bash\ncmd: ${cmd || "(empty)"}\nstatus: error\nreason: comando bash incompleto o inválido`)
+          await fail("comando bash incompleto o inválido")
+          continue
+        }
+        const call = process.platform === "win32" ? ["cmd", "/c", cmd] : ["bash", "-lc", cmd]
+        const proc = Process.spawn(call, {
           cwd: Instance.directory,
-          shell: true,
-          timeout: 30_000,
-          nothrow: true,
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout,
         })
-        const body = [out.stdout.toString(), out.stderr.toString()].filter((item) => item.trim()).join("\n")
-        actions.push(`bash ${item.cmd} (exit ${out.code})`)
+        let out = ""
+        let err = ""
+        let ping = 0
+        proc.stdout?.on("data", async (row) => {
+          out += row.toString()
+          if (!withTool) return
+          const now = Date.now()
+          if (now - ping < 400) return
+          ping = now
+          await Session.updatePart({
+            id: partID,
+            messageID: assistant.id,
+            sessionID: SessionID.construct(sessionID),
+            type: "tool",
+            callID,
+            tool: item.tool,
+            state: {
+              status: "running",
+              input: item as Record<string, unknown>,
+              title: `bash: ${cmd}`,
+              metadata: { output: `${out}${err}`.slice(-8000) },
+              time: { start },
+            },
+          }).catch(() => undefined)
+        })
+        proc.stderr?.on("data", async (row) => {
+          err += row.toString()
+          if (!withTool) return
+          const now = Date.now()
+          if (now - ping < 400) return
+          ping = now
+          await Session.updatePart({
+            id: partID,
+            messageID: assistant.id,
+            sessionID: SessionID.construct(sessionID),
+            type: "tool",
+            callID,
+            tool: item.tool,
+            state: {
+              status: "running",
+              input: item as Record<string, unknown>,
+              title: `bash: ${cmd}`,
+              metadata: { output: `${out}${err}`.slice(-8000) },
+              time: { start },
+            },
+          }).catch(() => undefined)
+        })
+        const code = await proc.exited.catch(() => 1)
+        const body = [out, err].filter((item) => item.trim()).join("\n")
+        actions.push(`bash ${cmd} (exit ${code})`)
         results.push(
-          ["tool: bash", `cmd: ${item.cmd}`, `exit: ${out.code}`, "status: ok", `output:\n${body || "(empty)"}`].join(
+          ["tool: bash", `cmd: ${cmd}`, `exit: ${code}`, "status: ok", `output:\n${body || "(empty)"}`].join(
             "\n",
           ),
         )
+        if (code !== 0) {
+          await fail(`exit ${code}`)
+          continue
+        }
+        await done(`bash: ${cmd}`, body || "(empty)")
+        continue
+      }
+      if (item.tool === "apply_patch") {
+        more = true
+        const file = item.patch
+          .split("\n")
+          .find((row) => row.startsWith("+++ "))
+          ?.replace("+++ ", "")
+          .replace(/^b\//, "")
+          .trim()
+        if (!file) {
+          actions.push("apply_patch (no se pudo detectar archivo)")
+          results.push("tool: apply_patch\nstatus: error\nreason: no se encontró +++ en el patch")
+          await fail("no se encontró +++ en el patch")
+          continue
+        }
+        const abs = path.resolve(Instance.directory, file)
+        if (!Filesystem.contains(Instance.directory, abs)) {
+          actions.push(`apply_patch ${file} (fuera del workspace)`)
+          results.push(`tool: apply_patch\nfile: ${file}\nstatus: error\nreason: ruta fuera del workspace`)
+          await fail("ruta fuera del workspace")
+          continue
+        }
+        const src = (await Filesystem.readText(abs).catch(() => "")).replace(/\r\n/g, "\n")
+        const next = (() => {
+          try {
+            return applyPatch(src, item.patch)
+          } catch {
+            return false
+          }
+        })()
+        const body = typeof next === "string" ? next : webchatPatchFallback(src, item.patch)
+        if (!body || body === src) {
+          actions.push(`apply_patch ${file} (sin cambios / error)`)
+          results.push(`tool: apply_patch\nfile: ${file}\nstatus: error\nreason: patch no aplicable`)
+          await fail("patch no aplicable")
+          continue
+        }
+        await Filesystem.write(abs, body)
+        actions.push(`apply_patch ${file}`)
+        results.push(`tool: apply_patch\nfile: ${file}\nstatus: ok`)
+        await done(`apply_patch: ${file}`, "ok")
+        continue
+      }
+      if (item.tool === "glob") {
+        const cwd = item.path ? path.resolve(Instance.directory, item.path) : Instance.directory
+        if (!Filesystem.contains(Instance.directory, cwd)) continue
+        const list = Glob.scanSync(item.pattern, { cwd, dot: true })
+        actions.push(`glob ${item.pattern} (${list.length})`)
+        results.push(`tool: glob\npattern: ${item.pattern}\nstatus: ok\noutput:\n${list.join("\n") || "(empty)"}`)
+        await done(`glob: ${item.pattern}`, list.join("\n") || "(empty)")
+        continue
+      }
+      if (item.tool === "grep") {
+        const root = item.path ? path.resolve(Instance.directory, item.path) : Instance.directory
+        if (!Filesystem.contains(Instance.directory, root)) continue
+        const call =
+          process.platform === "win32"
+            ? ["cmd", "/c", `rg -n --hidden --glob !node_modules ${JSON.stringify(item.pattern)} ${JSON.stringify(root)}`]
+            : ["bash", "-lc", `rg -n --hidden --glob '!node_modules' ${JSON.stringify(item.pattern)} ${JSON.stringify(root)}`]
+        const out = await Process.run(call, { cwd: Instance.directory, nothrow: true, timeout: 30_000 })
+        const body = [out.stdout.toString(), out.stderr.toString()].filter((item) => item.trim()).join("\n")
+        actions.push(`grep ${item.pattern} (exit ${out.code})`)
+        results.push(`tool: grep\npattern: ${item.pattern}\nstatus: ok\noutput:\n${body || "(empty)"}`)
+        await done(`grep: ${item.pattern}`, body || "(empty)")
+        continue
+      }
+      if (item.tool === "webfetch") {
+        const body = await fetch(item.url)
+          .then((res) => res.text())
+          .then((txt) => txt.slice(0, 20_000))
+          .catch((err) => `error: ${err instanceof Error ? err.message : String(err)}`)
+        actions.push(`webfetch ${item.url}`)
+        results.push(`tool: webfetch\nurl: ${item.url}\nstatus: ok\noutput:\n${body}`)
+        await done(`webfetch: ${item.url}`, body)
+        continue
+      }
+      if (item.tool === "todowrite") {
+        more = true
+        if (!sessionID) continue
+        await Todo.update({
+          sessionID: SessionID.construct(sessionID),
+          todos: item.todos,
+        }).catch(() => undefined)
+        actions.push(`todowrite ${item.todos.length}`)
+        results.push(`tool: todowrite\nstatus: ok`)
+        await done("todowrite", "ok")
+        continue
+      }
+      if (item.tool === "todoread") {
+        more = true
+        if (!sessionID) continue
+        const todos = await Todo.get(SessionID.construct(sessionID)).catch(() => [])
+        actions.push(`todoread ${todos.length}`)
+        results.push(`tool: todoread\nstatus: ok\noutput:\n${JSON.stringify(todos, null, 2)}`)
+        await done("todoread", JSON.stringify(todos, null, 2))
+        continue
+      }
+      if (item.tool === "invalid") {
+        more = true
+        actions.push(`invalid`)
+        results.push(`tool: invalid\nstatus: error\nreason: ${item.message}`)
+        await fail(item.message)
+        continue
       }
     }
-    return { actions, results }
+    return { actions, results, more }
   }
 
   const webchatApply = async (txt: string) => {
@@ -586,9 +927,6 @@ export namespace SessionPrompt {
       }
       await Filesystem.write(file, body)
       done.push(`edit ${rel}`)
-    }
-    if (!done.length && !skip.length) {
-      skip.push("sin bloques diff detectados en la respuesta")
     }
     return { done, skip }
   }
@@ -670,12 +1008,11 @@ export namespace SessionPrompt {
       "",
       "Continúa el flujo agéntico.",
       "Si necesitas más herramientas, devuelve SOLO ```opencode-actions.",
-      "Si ya terminaste, devuelve respuesta final + archivos en formato Ruta/código.",
+      "Si ya terminaste, responde breve y NO incluyas fragmentos de código ni bloques Ruta/archivo.",
     ].join("\n")
 
   const parseActions = (txt: string) => {
     const item = parseJson(txt)
-    if (!item) return []
     const schema = z
       .object({
         actions: z.array(
@@ -684,20 +1021,219 @@ export namespace SessionPrompt {
             z.object({ tool: z.literal("read"), file: z.string() }),
             z.object({ tool: z.literal("edit"), file: z.string(), oldString: z.string(), newString: z.string() }),
             z.object({ tool: z.literal("bash"), cmd: z.string() }),
+            z.object({ tool: z.literal("glob"), pattern: z.string(), path: z.string().optional() }),
+            z.object({ tool: z.literal("grep"), pattern: z.string(), path: z.string().optional() }),
+            z.object({ tool: z.literal("webfetch"), url: z.string() }),
+            z.object({ tool: z.literal("apply_patch"), patch: z.string() }),
+            z.object({
+              tool: z.literal("todowrite"),
+              todos: z.array(
+                z.object({
+                  content: z.string(),
+                  status: z.enum(["pending", "in_progress", "completed"]),
+                  priority: z.enum(["high", "medium", "low"]).optional(),
+                }),
+              ),
+            }),
+            z.object({ tool: z.literal("todoread") }),
+            z.object({ tool: z.literal("invalid"), message: z.string() }),
           ]),
         ),
       })
-      .safeParse(item)
-    if (!schema.success) return []
-    return [schema.data]
+    if (item) {
+      const ok = schema.safeParse(item)
+      if (ok.success) return [ok.data]
+    }
+    const list = parseActionsLoose(txt)
+    if (!list.length) return []
+    const ok = schema.safeParse({ actions: list })
+    if (!ok.success) return []
+    return [ok.data]
   }
+
+  const parseActionsLoose = (txt: string) => {
+    const out: {
+      tool: "write" | "read" | "edit" | "bash" | "glob" | "grep" | "webfetch" | "apply_patch" | "todoread" | "invalid"
+      file?: string
+      content?: string
+      oldString?: string
+      newString?: string
+      cmd?: string
+      pattern?: string
+      path?: string
+      url?: string
+      message?: string
+      patch?: string
+    }[] = []
+    for (const item of txt.matchAll(/"tool"\s*:\s*"edit"[\s\S]*?}(?=\s*,\s*{|\s*]\s*})/g)) {
+      const row = item[0] ?? ""
+      const file = parseActionsField(row, /"file"\s*:\s*"/, /"\s*,\s*"oldString"\s*:\s*"/)
+      const old = parseActionsField(row, /"oldString"\s*:\s*"/, /"\s*,\s*"newString"\s*:\s*"/)
+      const next = parseActionsTail(row, /"newString"\s*:\s*"/)
+      if (!file || old === undefined || next === undefined) continue
+      out.push({
+        tool: "edit",
+        file,
+        oldString: parseActionsText(old),
+        newString: parseActionsText(next),
+      })
+    }
+    if (out.length) return out
+    for (const item of txt.matchAll(
+      /"tool"\s*:\s*"edit"\s*,\s*"file"\s*:\s*"([^"]+)"\s*,\s*"oldString"\s*:\s*"([\s\S]*?)"\s*,\s*"newString"\s*:\s*"([\s\S]*?)"\s*}(?=\s*,\s*{|\s*]\s*})/g,
+    )) {
+      out.push({
+        tool: "edit",
+        file: item[1],
+        oldString: parseActionsText(item[2] ?? ""),
+        newString: parseActionsText(item[3] ?? ""),
+      })
+    }
+    for (const item of txt.matchAll(/"tool"\s*:\s*"read"\s*,\s*"file"\s*:\s*"([^"]+)"/g)) {
+      out.push({ tool: "read", file: item[1] })
+    }
+    for (const item of txt.matchAll(/"tool"\s*:\s*"write"\s*,\s*"file"\s*:\s*"([^"]+)"\s*,\s*"content"\s*:\s*"([\s\S]*?)"\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
+      out.push({ tool: "write", file: item[1], content: parseActionsText(item[2] ?? "") })
+    }
+    for (const item of txt.matchAll(/"tool"\s*:\s*"bash"\s*,\s*"cmd"\s*:\s*"([\s\S]*?)"\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
+      out.push({ tool: "bash", cmd: parseActionsText(item[1] ?? "") })
+    }
+    for (const item of txt.matchAll(/"tool"\s*:\s*"glob"\s*,\s*"pattern"\s*:\s*"([\s\S]*?)"(?:\s*,\s*"path"\s*:\s*"([\s\S]*?)")?\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
+      out.push({ tool: "glob", pattern: parseActionsText(item[1] ?? ""), path: parseActionsText(item[2] ?? "") })
+    }
+    for (const item of txt.matchAll(/"tool"\s*:\s*"grep"\s*,\s*"pattern"\s*:\s*"([\s\S]*?)"(?:\s*,\s*"path"\s*:\s*"([\s\S]*?)")?\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
+      out.push({ tool: "grep", pattern: parseActionsText(item[1] ?? ""), path: parseActionsText(item[2] ?? "") })
+    }
+    for (const item of txt.matchAll(/"tool"\s*:\s*"webfetch"\s*,\s*"url"\s*:\s*"([\s\S]*?)"\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
+      out.push({ tool: "webfetch", url: parseActionsText(item[1] ?? "") })
+    }
+    for (const item of txt.matchAll(/"tool"\s*:\s*"apply_patch"\s*,\s*"patch"\s*:\s*"([\s\S]*?)"\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
+      out.push({ tool: "apply_patch", patch: parseActionsText(item[1] ?? "") })
+    }
+    for (const item of txt.matchAll(/"tool"\s*:\s*"todoread"\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
+      out.push({ tool: "todoread" })
+    }
+    for (const item of txt.matchAll(/"tool"\s*:\s*"invalid"\s*,\s*"message"\s*:\s*"([\s\S]*?)"\s*}(?=\s*,\s*{|\s*]\s*})/g)) {
+      out.push({ tool: "invalid", message: parseActionsText(item[1] ?? "") })
+    }
+    return out
+  }
+
+  const parseActionsField = (txt: string, head: RegExp, tail: RegExp) => {
+    const from = txt.search(head)
+    if (from < 0) return
+    const a = txt.slice(from)
+    const h = a.match(head)?.[0] ?? ""
+    if (!h) return
+    const body = a.slice(h.length)
+    const b = body.search(tail)
+    if (b < 0) return
+    return body.slice(0, b)
+  }
+
+  const parseActionsTail = (txt: string, head: RegExp) => {
+    const from = txt.search(head)
+    if (from < 0) return
+    const a = txt.slice(from)
+    const h = a.match(head)?.[0] ?? ""
+    if (!h) return
+    const body = a.slice(h.length).trimEnd()
+    if (!body.endsWith('"')) return
+    return body.slice(0, -1)
+  }
+
+  const parseActionsText = (txt: string) =>
+    txt
+      .replace(/\\"/g, '"')
+      .replace(/\\n/g, "\n")
+      .replace(/\\r/g, "\r")
+      .replace(/\\t/g, "\t")
 
   const parseJson = (txt: string) => {
     try {
       return JSON.parse(txt)
     } catch {
-      return undefined
+      const chunk = parseJsonChunk(txt)
+      if (chunk) {
+        try {
+          return JSON.parse(chunk)
+        } catch {}
+      }
+      const fix = [...txt].reduce(
+        (acc, char) => {
+          if (!acc.str) {
+            if (char === '"') return { ...acc, out: `${acc.out}${char}`, str: true }
+            return { ...acc, out: `${acc.out}${char}` }
+          }
+          if (acc.esc) return { ...acc, out: `${acc.out}${char}`, esc: false }
+          if (char === "\\") return { ...acc, out: `${acc.out}${char}`, esc: true }
+          if (char === '"') return { ...acc, out: `${acc.out}${char}`, str: false }
+          if (char === "\r") return acc
+          if (char === "\n") return { ...acc, out: `${acc.out}\\n` }
+          if (char === "\t") return { ...acc, out: `${acc.out}\\t` }
+          if (char === "\b") return { ...acc, out: `${acc.out}\\b` }
+          if (char === "\f") return { ...acc, out: `${acc.out}\\f` }
+          if (char === "\u0000") return { ...acc, out: `${acc.out}\\u0000` }
+          if (char === "\u000b") return { ...acc, out: `${acc.out}\\u000b` }
+          if (char === "\u2028") return { ...acc, out: `${acc.out}\\u2028` }
+          if (char === "\u2029") return { ...acc, out: `${acc.out}\\u2029` }
+          if (char < " " && !["\n", "\r", "\t", "\b", "\f"].includes(char)) {
+            return { ...acc, out: `${acc.out}\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}` }
+          }
+          return { ...acc, out: `${acc.out}${char}` }
+        },
+        { out: "", str: false, esc: false },
+      ).out
+      try {
+        return JSON.parse(fix)
+      } catch {
+        const chunk = parseJsonChunk(fix)
+        if (chunk) {
+          try {
+            return JSON.parse(chunk)
+          } catch {}
+        }
+        return undefined
+      }
     }
+  }
+
+  const parseJsonChunk = (txt: string) => {
+    const start = [...txt].findIndex((item) => item === "{" || item === "[")
+    if (start < 0) return
+    let out = ""
+    let str = false
+    let esc = false
+    let dep = 0
+    let end = -1
+    for (let i = start; i < txt.length; i++) {
+      const char = txt[i] ?? ""
+      out += char
+      if (str) {
+        if (esc) {
+          esc = false
+          continue
+        }
+        if (char === "\\") {
+          esc = true
+          continue
+        }
+        if (char === '"') str = false
+        continue
+      }
+      if (char === '"') {
+        str = true
+        continue
+      }
+      if (char === "{" || char === "[") dep++
+      if (char === "}" || char === "]") dep--
+      if (dep === 0) {
+        end = i
+        break
+      }
+    }
+    if (end < 0) return
+    return out
   }
 
   export async function resolvePromptParts(template: string): Promise<PromptInput["parts"]> {
