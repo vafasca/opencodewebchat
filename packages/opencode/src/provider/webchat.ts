@@ -36,8 +36,17 @@ const pickTool = (part: unknown) => {
   }
   if (part.type === "tool-result") {
     const name = "toolName" in part && typeof part.toolName === "string" ? part.toolName : "unknown"
-    const result = "output" in part ? (typeof part.output === "string" ? part.output : JSON.stringify(part.output ?? {})) : "{}"
-    return `TOOL_RESULT ${name} ${result}`
+    const raw =
+      "output" in part
+        ? part.output
+        : "result" in part
+          ? part.result
+          : "content" in part
+            ? part.content
+            : {}
+    const result = typeof raw === "string" ? raw : JSON.stringify(raw ?? {})
+    const text = result.length > 3000 ? `${result.slice(0, 3000)}…[truncated]` : result
+    return `TOOL_RESULT ${name} ${text}`
   }
   return ""
 }
@@ -73,8 +82,10 @@ const hasTools = (tools: unknown) => {
   return Object.keys(tools).length > 0
 }
 
-const protocol = () =>
-  [
+const protocol = (tools?: unknown) => {
+  const names = Array.from(pickNames(tools)).sort()
+  const list = names.length ? names.join(", ") : "bash, read, glob, grep, apply_patch"
+  return [
     "",
     "TOOLS PROTOCOL (MANDATORY):",
     "- If the task needs actions in filesystem/terminal, respond ONLY with a single ```opencode-actions block.",
@@ -82,15 +93,26 @@ const protocol = () =>
     "- Return EXACTLY ONE action per assistant response (actions length must be 1).",
     "- Wait for TOOL_RESULT before deciding the next action.",
     "- Prefer reactive flow: inspect -> execute -> inspect result -> next action.",
-    "- Before patching files, prefer read/edit flow to avoid stale context.",
-    "- Use native tools: bash, write, edit, read, glob, grep, apply_patch, webfetch, todowrite, todoread.",
+    "- Use only tools available in this environment.",
+    `- Available tools: ${list}.`,
+    ...(names.includes("write")
+      ? ["- For full file replacement use write; for targeted edits use apply_patch."]
+      : names.includes("apply_patch")
+        ? ["- write is not available; use apply_patch for file edits."]
+        : []),
     "- Do not include explanations outside the block when using tools.",
     "- Example:",
     "```opencode-actions",
     '{"actions":[{"tool":"bash","cmd":"npm create ..."}]}',
     "```",
   ].join("\n")
+}
 
+const pickRecent = (prompt: Parameters<LanguageModelV2["doGenerate"]>[0]["prompt"]) => {
+  const i = prompt.findLastIndex((msg) => msg.role === "assistant")
+  if (i < 0) return prompt.filter((msg) => msg.role === "tool")
+  return prompt.slice(i + 1).filter((msg) => msg.role === "tool")
+}
 
 const format = (
   prompt: Parameters<LanguageModelV2["doGenerate"]>[0]["prompt"],
@@ -98,16 +120,33 @@ const format = (
   tools?: unknown,
 ) => {
   const out: string[] = []
+  const tool = pickRecent(prompt).slice(-6)
+  if (tool.length > 0) {
+    out.push("Estado reciente de herramientas:")
+    for (const msg of tool) {
+      const chunks = pick(msg)
+      if (!chunks.length) continue
+      out.push(chunks.join("\n"))
+    }
+    out.push("Continúa desde este estado. Si necesitas otra acción responde con un solo bloque opencode-actions.")
+    return `${out.join("\n\n")}\n\n${protocol(tools)}`
+  }
+
   if (system?.trim()) out.push(`System:\n${system.trim()}`)
-  for (const msg of prompt) {
-    const role = normRole(msg.role)
-    const chunks = pick(msg)
-    if (!chunks.length) continue
-    out.push(`${role}:\n${chunks.join("\n")}`)
+  const user = prompt.findLast((msg) => msg.role === "user")
+  if (user) {
+    const chunks = pick(user)
+    if (chunks.length) out.push(`User:\n${chunks.join("\n")}`)
+  } else {
+    for (const msg of prompt.slice(-2)) {
+      const chunks = pick(msg)
+      if (!chunks.length) continue
+      out.push(`${normRole(msg.role)}:\n${chunks.join("\n")}`)
+    }
   }
   const body = out.join("\n\n")
   if (!hasTools(tools)) return body
-  return `${body}\n\n${protocol()}`
+  return `${body}\n\n${protocol(tools)}`
 }
 
 const pickObjects = (txt: string) => {
@@ -269,7 +308,9 @@ const normalizeCall = (call: { tool: string; input: Record<string, unknown> }, t
 
   if (tool === "read") {
     if (typeof input.filePath !== "string" && typeof input.file === "string") input.filePath = input.file
+    if (typeof input.filePath !== "string" && typeof input.path === "string") input.filePath = input.path
     delete input.file
+    delete input.path
   }
 
   if (!names.size || names.has(tool) || tool === "invalid") {
@@ -277,11 +318,12 @@ const normalizeCall = (call: { tool: string; input: Record<string, unknown> }, t
   }
 
   if (tool === "write" && names.has("apply_patch")) {
-    if (typeof input.file === "string" && typeof input.content === "string") {
+    const file = typeof input.filePath === "string" ? input.filePath : typeof call.input.file === "string" ? call.input.file : ""
+    if (file && typeof input.content === "string") {
       return {
         tool: "apply_patch",
         input: {
-          patchText: makePatch(input.file, input.content),
+          patchText: makePatch(file, input.content),
         },
       }
     }
