@@ -262,6 +262,16 @@ const normalizeCall = (call: { tool: string; input: Record<string, unknown> }, t
     if (typeof input.description !== "string") input.description = pickDesc(input)
   }
 
+  if (tool === "write") {
+    if (typeof input.filePath !== "string" && typeof input.file === "string") input.filePath = input.file
+    delete input.file
+  }
+
+  if (tool === "read") {
+    if (typeof input.filePath !== "string" && typeof input.file === "string") input.filePath = input.file
+    delete input.file
+  }
+
   if (!names.size || names.has(tool) || tool === "invalid") {
     return { tool, input }
   }
@@ -345,6 +355,14 @@ const pickSession = (headers?: Record<string, string | undefined>) => {
   return headers["x-opencode-session"] ?? headers["X-Opencode-Session"] ?? headers["x-opencode-session-id"]
 }
 
+const pickOpts = (opts?: Record<string, unknown>) => {
+  if (!opts) return {}
+  if (!("opencode" in opts)) return {}
+  const val = opts["opencode"]
+  if (!val || typeof val !== "object") return {}
+  return val as Record<string, unknown>
+}
+
 const usage = {
   inputTokens: undefined,
   outputTokens: undefined,
@@ -368,17 +386,21 @@ export class WebchatLanguageModel implements LanguageModelV2 {
     const cfg = await Config.get()
     const prompt = format(options.prompt, options.system, options.tools)
     const model = pickModel(this.modelId, cfg)
+    const opts = pickOpts(options.providerOptions)
+    const webchat = (opts.webchat && typeof opts.webchat === "object" ? opts.webchat : {}) as Record<string, unknown>
+    const browser = (webchat.browser as "chrome" | "edge" | undefined) ?? model.browser
+    const target = (webchat.target as "chatgpt" | "claude" | undefined) ?? model.target
     const raw = await Webchat.run({
       prompt,
-      browser: model.browser,
-      target: model.target,
-      url: cfg.webchat?.url,
-      timeout: cfg.webchat?.timeout,
-      input: cfg.webchat?.input_selector,
-      response: cfg.webchat?.response_selector,
-      settle: cfg.webchat?.settle,
-      headless: cfg.webchat?.headless,
-      sessionID: pickSession(options.headers),
+      browser,
+      target,
+      url: (webchat.url as string | undefined) ?? cfg.webchat?.url,
+      timeout: (webchat.timeout as number | undefined) ?? cfg.webchat?.timeout,
+      input: (webchat.input_selector as string | undefined) ?? cfg.webchat?.input_selector,
+      response: (webchat.response_selector as string | undefined) ?? cfg.webchat?.response_selector,
+      settle: (webchat.settle as number | undefined) ?? cfg.webchat?.settle,
+      headless: (webchat.headless as boolean | undefined) ?? cfg.webchat?.headless,
+      sessionID: (opts.sessionID as string | undefined) ?? pickSession(options.headers),
     })
     const calls = pickStep(pickCalls(raw, options.tools), options.prompt)
     const content: LanguageModelV2Content[] = calls.length
@@ -411,17 +433,21 @@ export class WebchatLanguageModel implements LanguageModelV2 {
     const cfg = await Config.get()
     const prompt = format(options.prompt, options.system, options.tools)
     const model = pickModel(this.modelId, cfg)
+    const opts = pickOpts(options.providerOptions)
+    const webchat = (opts.webchat && typeof opts.webchat === "object" ? opts.webchat : {}) as Record<string, unknown>
+    const browser = (webchat.browser as "chrome" | "edge" | undefined) ?? model.browser
+    const target = (webchat.target as "chatgpt" | "claude" | undefined) ?? model.target
     const raw = await Webchat.run({
       prompt,
-      browser: model.browser,
-      target: model.target,
-      url: cfg.webchat?.url,
-      timeout: cfg.webchat?.timeout,
-      input: cfg.webchat?.input_selector,
-      response: cfg.webchat?.response_selector,
-      settle: cfg.webchat?.settle,
-      headless: cfg.webchat?.headless,
-      sessionID: pickSession(options.headers),
+      browser,
+      target,
+      url: (webchat.url as string | undefined) ?? cfg.webchat?.url,
+      timeout: (webchat.timeout as number | undefined) ?? cfg.webchat?.timeout,
+      input: (webchat.input_selector as string | undefined) ?? cfg.webchat?.input_selector,
+      response: (webchat.response_selector as string | undefined) ?? cfg.webchat?.response_selector,
+      settle: (webchat.settle as number | undefined) ?? cfg.webchat?.settle,
+      headless: (webchat.headless as boolean | undefined) ?? cfg.webchat?.headless,
+      sessionID: (opts.sessionID as string | undefined) ?? pickSession(options.headers),
     })
     const calls = pickStep(pickCalls(raw, options.tools), options.prompt)
     const finishReason: LanguageModelV2FinishReason = calls.length ? "tool-calls" : "stop"
