@@ -133,16 +133,11 @@ const format = (
   }
 
   if (system?.trim()) out.push(`System:\n${system.trim()}`)
-  const user = prompt.findLast((msg) => msg.role === "user")
-  if (user) {
-    const chunks = pick(user)
-    if (chunks.length) out.push(`User:\n${chunks.join("\n")}`)
-  } else {
-    for (const msg of prompt.slice(-2)) {
-      const chunks = pick(msg)
-      if (!chunks.length) continue
-      out.push(`${normRole(msg.role)}:\n${chunks.join("\n")}`)
-    }
+  for (const msg of prompt) {
+    const role = normRole(msg.role)
+    const chunks = pick(msg)
+    if (!chunks.length) continue
+    out.push(`${role}:\n${chunks.join("\n")}`)
   }
   const body = out.join("\n\n")
   if (!hasTools(tools)) return body
