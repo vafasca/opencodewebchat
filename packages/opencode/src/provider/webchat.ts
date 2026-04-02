@@ -82,7 +82,7 @@ const hasTools = (tools: unknown) => {
   return Object.keys(tools).length > 0
 }
 
-const protocol = (tools?: unknown) => {
+const protocol = (tools?: unknown, bash?: boolean) => {
   const names = Array.from(pickNames(tools)).sort()
   const list = names.length ? names.join(", ") : "bash, read, glob, grep, apply_patch"
   return [
@@ -100,6 +100,12 @@ const protocol = (tools?: unknown) => {
       : names.includes("apply_patch")
         ? ["- write is not available; use apply_patch for file edits."]
         : []),
+    ...(bash
+      ? [
+          "- bash is currently failing with ENOENT/uv_spawn in this environment; do not retry the same bash command.",
+          "- If bash is required, use the question tool once to ask the user to fix shell path (eg OPENCODE_GIT_BASH_PATH) before continuing.",
+        ]
+      : []),
     "- Do not include explanations outside the block when using tools.",
     "- Example:",
     "```opencode-actions",
@@ -109,6 +115,7 @@ const protocol = (tools?: unknown) => {
 }
 
 const isErr = (txt: string) => /(?:\berror\b|\bfailed\b|\bexception\b|\bnot found\b|\bno such\b)/i.test(txt)
+const isBashErr = (txt: string) => /TOOL_RESULT bash .*?(?:ENOENT|uv_spawn)/i.test(txt)
 
 const format = (
   prompt: Parameters<LanguageModelV2["doGenerate"]>[0]["prompt"],
@@ -116,6 +123,10 @@ const format = (
   tools?: unknown,
 ) => {
   const out: string[] = []
+  const bad = prompt
+    .filter((msg) => msg.role === "tool")
+    .flatMap((msg) => pick(msg))
+    .some((line) => isBashErr(line))
   if (system?.trim()) out.push(`System:\n${system.trim()}`)
   const idx = prompt
     .map((msg, i) => (msg.role === "tool" ? i : -1))
@@ -136,7 +147,7 @@ const format = (
   }
   const body = out.join("\n\n")
   if (!hasTools(tools)) return body
-  return `${body}\n\n${protocol(tools)}`
+  return `${body}\n\n${protocol(tools, bad)}`
 }
 
 const pickObjects = (txt: string) => {
