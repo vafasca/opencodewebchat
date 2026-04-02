@@ -108,11 +108,7 @@ const protocol = (tools?: unknown) => {
   ].join("\n")
 }
 
-const pickRecent = (prompt: Parameters<LanguageModelV2["doGenerate"]>[0]["prompt"]) => {
-  const i = prompt.findLastIndex((msg) => msg.role === "assistant")
-  if (i < 0) return prompt.filter((msg) => msg.role === "tool")
-  return prompt.slice(i + 1).filter((msg) => msg.role === "tool")
-}
+const isErr = (txt: string) => /(?:\berror\b|\bfailed\b|\bexception\b|\bnot found\b|\bno such\b)/i.test(txt)
 
 const format = (
   prompt: Parameters<LanguageModelV2["doGenerate"]>[0]["prompt"],
@@ -120,22 +116,21 @@ const format = (
   tools?: unknown,
 ) => {
   const out: string[] = []
-  const tool = pickRecent(prompt).slice(-6)
-  if (tool.length > 0) {
-    out.push("Estado reciente de herramientas:")
-    for (const msg of tool) {
-      const chunks = pick(msg)
-      if (!chunks.length) continue
-      out.push(chunks.join("\n"))
-    }
-    out.push("Continúa desde este estado. Si necesitas otra acción responde con un solo bloque opencode-actions.")
-    return `${out.join("\n\n")}\n\n${protocol(tools)}`
-  }
-
   if (system?.trim()) out.push(`System:\n${system.trim()}`)
-  for (const msg of prompt) {
+  const idx = prompt
+    .map((msg, i) => (msg.role === "tool" ? i : -1))
+    .filter((i) => i >= 0)
+  const keep = new Set(idx.slice(-3))
+  for (let i = 0; i < prompt.length; i++) {
+    const msg = prompt[i]
     const role = normRole(msg.role)
-    const chunks = pick(msg)
+    let chunks = pick(msg)
+    if (msg.role === "assistant") {
+      chunks = chunks.filter((line) => line.startsWith("TOOL_CALL "))
+    }
+    if (msg.role === "tool" && !keep.has(i)) {
+      chunks = chunks.filter((line) => !isErr(line))
+    }
     if (!chunks.length) continue
     out.push(`${role}:\n${chunks.join("\n")}`)
   }
