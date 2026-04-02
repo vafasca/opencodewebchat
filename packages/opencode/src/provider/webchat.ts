@@ -36,8 +36,17 @@ const pickTool = (part: unknown) => {
   }
   if (part.type === "tool-result") {
     const name = "toolName" in part && typeof part.toolName === "string" ? part.toolName : "unknown"
-    const result = "output" in part ? (typeof part.output === "string" ? part.output : JSON.stringify(part.output ?? {})) : "{}"
-    return `TOOL_RESULT ${name} ${result}`
+    const raw =
+      "output" in part
+        ? part.output
+        : "result" in part
+          ? part.result
+          : "content" in part
+            ? part.content
+            : {}
+    const result = typeof raw === "string" ? raw : JSON.stringify(raw ?? {})
+    const text = result.length > 3000 ? `${result.slice(0, 3000)}…[truncated]` : result
+    return `TOOL_RESULT ${name} ${text}`
   }
   return ""
 }
@@ -73,8 +82,10 @@ const hasTools = (tools: unknown) => {
   return Object.keys(tools).length > 0
 }
 
-const protocol = () =>
-  [
+const protocol = (tools?: unknown, bash?: boolean) => {
+  const names = Array.from(pickNames(tools)).sort()
+  const list = names.length ? names.join(", ") : "bash, read, glob, grep, apply_patch"
+  return [
     "",
     "TOOLS PROTOCOL (MANDATORY):",
     "- If the task needs actions in filesystem/terminal, respond ONLY with a single ```opencode-actions block.",
@@ -82,15 +93,29 @@ const protocol = () =>
     "- Return EXACTLY ONE action per assistant response (actions length must be 1).",
     "- Wait for TOOL_RESULT before deciding the next action.",
     "- Prefer reactive flow: inspect -> execute -> inspect result -> next action.",
-    "- Before patching files, prefer read/edit flow to avoid stale context.",
-    "- Use native tools: bash, write, edit, read, glob, grep, apply_patch, webfetch, todowrite, todoread.",
+    "- Use only tools available in this environment.",
+    `- Available tools: ${list}.`,
+    ...(names.includes("write")
+      ? ["- For full file replacement use write; for targeted edits use apply_patch."]
+      : names.includes("apply_patch")
+        ? ["- write is not available; use apply_patch for file edits."]
+        : []),
+    ...(bash
+      ? [
+          "- bash is currently failing with ENOENT/uv_spawn in this environment; do not retry the same bash command.",
+          "- If bash is required, use the question tool once to ask the user to fix shell path (eg OPENCODE_GIT_BASH_PATH) before continuing.",
+        ]
+      : []),
     "- Do not include explanations outside the block when using tools.",
     "- Example:",
     "```opencode-actions",
     '{"actions":[{"tool":"bash","cmd":"npm create ..."}]}',
     "```",
   ].join("\n")
+}
 
+const isErr = (txt: string) => /(?:\berror\b|\bfailed\b|\bexception\b|\bnot found\b|\bno such\b)/i.test(txt)
+const isBashErr = (txt: string) => /TOOL_RESULT bash .*?(?:ENOENT|uv_spawn)/i.test(txt)
 
 const format = (
   prompt: Parameters<LanguageModelV2["doGenerate"]>[0]["prompt"],
@@ -98,16 +123,31 @@ const format = (
   tools?: unknown,
 ) => {
   const out: string[] = []
+  const bad = prompt
+    .filter((msg) => msg.role === "tool")
+    .flatMap((msg) => pick(msg))
+    .some((line) => isBashErr(line))
   if (system?.trim()) out.push(`System:\n${system.trim()}`)
-  for (const msg of prompt) {
+  const idx = prompt
+    .map((msg, i) => (msg.role === "tool" ? i : -1))
+    .filter((i) => i >= 0)
+  const keep = new Set(idx.slice(-3))
+  for (let i = 0; i < prompt.length; i++) {
+    const msg = prompt[i]
     const role = normRole(msg.role)
-    const chunks = pick(msg)
+    let chunks = pick(msg)
+    if (msg.role === "assistant") {
+      chunks = chunks.filter((line) => line.startsWith("TOOL_CALL "))
+    }
+    if (msg.role === "tool" && !keep.has(i)) {
+      chunks = chunks.filter((line) => !isErr(line))
+    }
     if (!chunks.length) continue
     out.push(`${role}:\n${chunks.join("\n")}`)
   }
   const body = out.join("\n\n")
   if (!hasTools(tools)) return body
-  return `${body}\n\n${protocol()}`
+  return `${body}\n\n${protocol(tools, bad)}`
 }
 
 const pickObjects = (txt: string) => {
@@ -262,16 +302,29 @@ const normalizeCall = (call: { tool: string; input: Record<string, unknown> }, t
     if (typeof input.description !== "string") input.description = pickDesc(input)
   }
 
+  if (tool === "write") {
+    if (typeof input.filePath !== "string" && typeof input.file === "string") input.filePath = input.file
+    delete input.file
+  }
+
+  if (tool === "read") {
+    if (typeof input.filePath !== "string" && typeof input.file === "string") input.filePath = input.file
+    if (typeof input.filePath !== "string" && typeof input.path === "string") input.filePath = input.path
+    delete input.file
+    delete input.path
+  }
+
   if (!names.size || names.has(tool) || tool === "invalid") {
     return { tool, input }
   }
 
   if (tool === "write" && names.has("apply_patch")) {
-    if (typeof input.file === "string" && typeof input.content === "string") {
+    const file = typeof input.filePath === "string" ? input.filePath : typeof call.input.file === "string" ? call.input.file : ""
+    if (file && typeof input.content === "string") {
       return {
         tool: "apply_patch",
         input: {
-          patchText: makePatch(input.file, input.content),
+          patchText: makePatch(file, input.content),
         },
       }
     }
@@ -345,6 +398,14 @@ const pickSession = (headers?: Record<string, string | undefined>) => {
   return headers["x-opencode-session"] ?? headers["X-Opencode-Session"] ?? headers["x-opencode-session-id"]
 }
 
+const pickOpts = (opts?: Record<string, unknown>) => {
+  if (!opts) return {}
+  if (!("opencode" in opts)) return {}
+  const val = opts["opencode"]
+  if (!val || typeof val !== "object") return {}
+  return val as Record<string, unknown>
+}
+
 const usage = {
   inputTokens: undefined,
   outputTokens: undefined,
@@ -368,17 +429,21 @@ export class WebchatLanguageModel implements LanguageModelV2 {
     const cfg = await Config.get()
     const prompt = format(options.prompt, options.system, options.tools)
     const model = pickModel(this.modelId, cfg)
+    const opts = pickOpts(options.providerOptions)
+    const webchat = (opts.webchat && typeof opts.webchat === "object" ? opts.webchat : {}) as Record<string, unknown>
+    const browser = (webchat.browser as "chrome" | "edge" | undefined) ?? model.browser
+    const target = (webchat.target as "chatgpt" | "claude" | undefined) ?? model.target
     const raw = await Webchat.run({
       prompt,
-      browser: model.browser,
-      target: model.target,
-      url: cfg.webchat?.url,
-      timeout: cfg.webchat?.timeout,
-      input: cfg.webchat?.input_selector,
-      response: cfg.webchat?.response_selector,
-      settle: cfg.webchat?.settle,
-      headless: cfg.webchat?.headless,
-      sessionID: pickSession(options.headers),
+      browser,
+      target,
+      url: (webchat.url as string | undefined) ?? cfg.webchat?.url,
+      timeout: (webchat.timeout as number | undefined) ?? cfg.webchat?.timeout,
+      input: (webchat.input_selector as string | undefined) ?? cfg.webchat?.input_selector,
+      response: (webchat.response_selector as string | undefined) ?? cfg.webchat?.response_selector,
+      settle: (webchat.settle as number | undefined) ?? cfg.webchat?.settle,
+      headless: (webchat.headless as boolean | undefined) ?? cfg.webchat?.headless,
+      sessionID: (opts.sessionID as string | undefined) ?? pickSession(options.headers),
     })
     const calls = pickStep(pickCalls(raw, options.tools), options.prompt)
     const content: LanguageModelV2Content[] = calls.length
@@ -411,17 +476,21 @@ export class WebchatLanguageModel implements LanguageModelV2 {
     const cfg = await Config.get()
     const prompt = format(options.prompt, options.system, options.tools)
     const model = pickModel(this.modelId, cfg)
+    const opts = pickOpts(options.providerOptions)
+    const webchat = (opts.webchat && typeof opts.webchat === "object" ? opts.webchat : {}) as Record<string, unknown>
+    const browser = (webchat.browser as "chrome" | "edge" | undefined) ?? model.browser
+    const target = (webchat.target as "chatgpt" | "claude" | undefined) ?? model.target
     const raw = await Webchat.run({
       prompt,
-      browser: model.browser,
-      target: model.target,
-      url: cfg.webchat?.url,
-      timeout: cfg.webchat?.timeout,
-      input: cfg.webchat?.input_selector,
-      response: cfg.webchat?.response_selector,
-      settle: cfg.webchat?.settle,
-      headless: cfg.webchat?.headless,
-      sessionID: pickSession(options.headers),
+      browser,
+      target,
+      url: (webchat.url as string | undefined) ?? cfg.webchat?.url,
+      timeout: (webchat.timeout as number | undefined) ?? cfg.webchat?.timeout,
+      input: (webchat.input_selector as string | undefined) ?? cfg.webchat?.input_selector,
+      response: (webchat.response_selector as string | undefined) ?? cfg.webchat?.response_selector,
+      settle: (webchat.settle as number | undefined) ?? cfg.webchat?.settle,
+      headless: (webchat.headless as boolean | undefined) ?? cfg.webchat?.headless,
+      sessionID: (opts.sessionID as string | undefined) ?? pickSession(options.headers),
     })
     const calls = pickStep(pickCalls(raw, options.tools), options.prompt)
     const finishReason: LanguageModelV2FinishReason = calls.length ? "tool-calls" : "stop"

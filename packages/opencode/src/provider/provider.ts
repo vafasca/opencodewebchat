@@ -18,6 +18,7 @@ import { iife } from "@/util/iife"
 import { Global } from "../global"
 import path from "path"
 import { Filesystem } from "../util/filesystem"
+import { appendFile, mkdir } from "fs/promises"
 
 // Direct imports for bundled providers
 import { createAmazonBedrock, type AmazonBedrockProviderSettings } from "@ai-sdk/amazon-bedrock"
@@ -55,6 +56,26 @@ import { WebchatLanguageModel } from "./webchat"
 
 export namespace Provider {
   const log = Log.create({ service: "provider" })
+  const reqf = path.join(process.cwd(), "model-request.jsonl")
+  const resf = path.join(process.cwd(), "model-response.jsonl")
+
+  function stringify(input: unknown) {
+    if (typeof input === "string") return input
+    if (input === undefined) return undefined
+    if (input instanceof Uint8Array) return Buffer.from(input).toString("utf-8")
+    if (input instanceof ArrayBuffer) return Buffer.from(input).toString("utf-8")
+    return String(input)
+  }
+
+  function head(input?: HeadersInit) {
+    if (!input) return {}
+    return Object.fromEntries(new Headers(input).entries())
+  }
+
+  async function write(file: string, item: Record<string, unknown>) {
+    await mkdir(path.dirname(file), { recursive: true }).catch(() => undefined)
+    await appendFile(file, `${JSON.stringify(item)}\n`).catch(() => undefined)
+  }
 
   function shouldUseCopilotResponsesApi(modelID: string): boolean {
     const match = /^gpt-(\d+)/.exec(modelID)
@@ -62,7 +83,12 @@ export namespace Provider {
     return Number(match[1]) >= 5 && !modelID.startsWith("gpt-5-mini")
   }
 
-  function wrapSSE(res: Response, ms: number, ctl: AbortController) {
+  function wrapSSE(
+    res: Response,
+    ms: number,
+    ctl: AbortController,
+    tap?: { part: (x: Uint8Array) => void; done: (reason?: string) => void },
+  ) {
     if (typeof ms !== "number" || ms <= 0) return res
     if (!res.body) return res
     if (!res.headers.get("content-type")?.includes("text/event-stream")) return res
@@ -91,13 +117,16 @@ export namespace Provider {
         })
 
         if (part.done) {
+          tap?.done()
           ctrl.close()
           return
         }
 
+        tap?.part(part.value)
         ctrl.enqueue(part.value)
       },
       async cancel(reason) {
+        tap?.done(String(reason))
         ctl.abort(reason)
         await reader.cancel(reason)
       },
@@ -1260,6 +1289,24 @@ export namespace Provider {
 
         const combined = signals.length === 0 ? null : signals.length === 1 ? signals[0] : AbortSignal.any(signals)
         if (combined) opts.signal = combined
+        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
+        const req = crypto.randomUUID()
+        const method = opts.method ?? (input instanceof Request ? input.method : "GET")
+        const reqHead = {
+          ...(input instanceof Request ? head(input.headers) : {}),
+          ...head(opts.headers),
+        }
+        const reqBody = stringify(opts.body)
+        await write(reqf, {
+          req,
+          time: new Date().toISOString(),
+          providerID: model.providerID,
+          modelID: model.id,
+          method,
+          url,
+          headers: reqHead,
+          body: reqBody,
+        })
 
         // Strip openai itemId metadata following what codex does
         // Codex uses #[serde(skip_serializing)] on id fields for all item types:
@@ -1284,9 +1331,45 @@ export namespace Provider {
           // @ts-ignore see here: https://github.com/oven-sh/bun/issues/16682
           timeout: false,
         })
+        const resHead = head(res.headers)
 
-        if (!chunkAbortCtl) return res
-        return wrapSSE(res, chunkTimeout, chunkAbortCtl)
+        if (!chunkAbortCtl) {
+          const body = await res.clone().text().catch(() => undefined)
+          await write(resf, {
+            req,
+            time: new Date().toISOString(),
+            providerID: model.providerID,
+            modelID: model.id,
+            status: res.status,
+            statusText: res.statusText,
+            headers: resHead,
+            body,
+          })
+          return res
+        }
+        const dec = new TextDecoder()
+        const all: string[] = []
+        const next = wrapSSE(res, chunkTimeout, chunkAbortCtl, {
+          part(x) {
+            all.push(dec.decode(x, { stream: true }))
+          },
+          done(reason) {
+            all.push(dec.decode())
+            void write(resf, {
+              req,
+              time: new Date().toISOString(),
+              providerID: model.providerID,
+              modelID: model.id,
+              status: res.status,
+              statusText: res.statusText,
+              headers: resHead,
+              body: all.join(""),
+              ended: reason ? "cancel" : "done",
+              reason,
+            })
+          },
+        })
+        return next
       }
 
       const bundledFn = BUNDLED_PROVIDERS[model.api.npm]

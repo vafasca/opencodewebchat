@@ -165,6 +165,7 @@ export namespace LLM {
       isOpenaiOauth || provider.id.includes("github-copilot")
         ? undefined
         : ProviderTransform.maxOutputTokens(input.model)
+    const popts = ProviderTransform.providerOptions(input.model, params.options)
 
     const tools = await resolveTools(input)
 
@@ -247,7 +248,14 @@ export namespace LLM {
       temperature: params.temperature,
       topP: params.topP,
       topK: params.topK,
-      providerOptions: ProviderTransform.providerOptions(input.model, params.options),
+      providerOptions: {
+        ...popts,
+        opencode: {
+          ...(typeof popts.opencode === "object" && popts.opencode ? popts.opencode : {}),
+          sessionID: input.sessionID,
+          webchat: cfg.webchat ?? {},
+        },
+      },
       activeTools: Object.keys(tools).filter((x) => x !== "invalid"),
       tools,
       toolChoice: input.toolChoice,
